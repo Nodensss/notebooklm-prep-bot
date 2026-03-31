@@ -1,0 +1,16 @@
+[Unit]
+Description=NotebookLM Prep Bot
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/notebooklm-prep-bot
+ExecStart=/home/ubuntu/notebooklm-prep-bot/venv/bin/python bot.py
+Restart=always
+RestartSec=10
+EnvironmentFile=/home/ubuntu/notebooklm-prep-bot/.env
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
