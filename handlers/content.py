@@ -549,7 +549,13 @@ async def _process_image_group_and_reply(
         )
         return
 
-    status_msg = await message.answer("🖼 Обрабатываю изображения...")
+    count = len(file_ids)
+    note = ""
+    if count > 10:
+        note = "\n⏳ Много изображений — обработка займёт пару минут."
+    status_msg = await message.answer(
+        f"🖼 Обрабатываю {count} изображений...{note}"
+    )
     image_paths: list[str] = []
 
     try:
@@ -561,7 +567,15 @@ async def _process_image_group_and_reply(
             )
             image_paths.append(image_path)
 
-        description = await describe_images(image_paths)
+        async def _progress(current: int, total: int) -> None:
+            try:
+                await status_msg.edit_text(
+                    f"🖼 Обрабатываю изображение {current} из {total}..."
+                )
+            except Exception:
+                pass  # edit_text может упасть если текст не изменился
+
+        description = await describe_images(image_paths, progress_callback=_progress)
 
         if not description:
             await status_msg.edit_text(

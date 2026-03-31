@@ -4,6 +4,7 @@ import re
 import google.generativeai as genai
 
 from config import GEMINI_API_KEY
+from services.rate_limiter import gemini_limiter
 
 logger = logging.getLogger(__name__)
 
@@ -112,8 +113,12 @@ async def format_for_learning(transcript: str) -> dict:
 
     try:
         logger.info("Отправляю транскрипт в Gemini для структурирования...")
-        response = await model.generate_content_async(prompt)
+        response = await gemini_limiter.execute(
+            lambda: model.generate_content_async(prompt)
+        )
         full_text = response.text
+    except RuntimeError:
+        raise
     except Exception as error:
         error_str = str(error)
         if "API_KEY" in error_str or "401" in error_str:
@@ -138,8 +143,12 @@ async def generate_notebooklm_prompt(transcript: str, learning_pack: dict) -> st
 
     try:
         logger.info("Генерирую инструкцию для NotebookLM...")
-        response = await model.generate_content_async(prompt)
+        response = await gemini_limiter.execute(
+            lambda: model.generate_content_async(prompt)
+        )
         return response.text.strip()
+    except RuntimeError:
+        raise
     except Exception as error:
         raise RuntimeError(
             f"Ошибка генерации промпта NotebookLM: {error}"
