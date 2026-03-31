@@ -1,21 +1,33 @@
 # Упаковщик для NotebookLM
 
-Telegram-бот, который принимает видео с лекциями и уроками, транскрибирует речь и подготавливает структурированные учебные материалы для загрузки в Google NotebookLM.
+Telegram-бот, который принимает учебные материалы, подготавливает структурированные конспекты для NotebookLM и умеет генерировать специализированные промпты для презентаций, видео и инфографики.
 
 ## Возможности
 
-- Приём видео, видеосообщений (кружочков) и видеодокументов
-- Извлечение аудио из видео (ffmpeg)
-- Транскрипция речи через Groq Whisper API
-- Структурирование текста через Google Gemini API
-- Формирование пакета материалов для NotebookLM
+- Приём видео, видеосообщений и видеодокументов
+- Приём изображений: фото, скриншоты, слайды и альбомы
+- Приём текстовых документов: PDF, DOCX, TXT
+- Обработка длинных текстовых сообщений как учебного материала
+- Генерация учебного пакета для NotebookLM:
+  - суть за 30 секунд
+  - ключевые тезисы
+  - план материала
+  - вопросы для самопроверки
+  - карточки для запоминания
+  - практическое задание
+  - промпт для NotebookLM Audio Overview
+- Генерация промптов для:
+  - презентаций
+  - NotebookLM Video Overview
+  - инфографики
+- Дневной лимит: 5 обработок на пользователя
 
-## Установка и запуск
+## Локальный запуск
 
 1. Клонируйте репозиторий:
 
 ```bash
-git clone https://github.com/nodensss/notebooklm-prep-bot.git
+git clone https://github.com/Nodensss/notebooklm-prep-bot.git
 cd notebooklm-prep-bot
 ```
 
@@ -33,15 +45,15 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-- `BOT_TOKEN` — токен Telegram-бота от @BotFather
-- `GROQ_API_KEY` — ключ API Groq (https://console.groq.com)
-- `GEMINI_API_KEY` — ключ API Google Gemini (https://aistudio.google.com)
+- `BOT_TOKEN` — токен Telegram-бота от `@BotFather`
+- `GROQ_API_KEY` — ключ API Groq
+- `GEMINI_API_KEY` — ключ Google Gemini
 
-4. Убедитесь, что установлен ffmpeg:
+4. Убедитесь, что установлен `ffmpeg`:
 
 ```bash
 sudo apt install ffmpeg   # Linux
-brew install ffmpeg        # macOS
+brew install ffmpeg       # macOS
 ```
 
 5. Запустите бота:
@@ -50,9 +62,93 @@ brew install ffmpeg        # macOS
 python bot.py
 ```
 
+## Деплой на VPS (Oracle Cloud Free Tier)
+
+### 1. Создайте бесплатный инстанс
+
+- Зарегистрируйте аккаунт в Oracle Cloud Free Tier
+- Создайте Compute Instance с образом Ubuntu
+- Для бесплатного ARM-варианта подойдёт `VM.Standard.A1.Flex` (Ampere)
+- Сохраните публичный IP-адрес и SSH-ключ
+
+### 2. Подключитесь по SSH
+
+```bash
+ssh ubuntu@<IP_ВАШЕГО_СЕРВЕРА>
+```
+
+### 3. Запустите автоматическую установку
+
+```bash
+git clone https://github.com/Nodensss/notebooklm-prep-bot.git
+cd notebooklm-prep-bot
+chmod +x deploy/setup.sh deploy/update.sh
+./deploy/setup.sh
+```
+
+Скрипт:
+
+- установит `python3.11`, `venv`, `pip`, `ffmpeg`, `git`
+- создаст виртуальное окружение
+- установит зависимости
+- создаст `.env`, если его ещё нет
+
+### 4. Заполните `.env`
+
+```bash
+nano /home/ubuntu/notebooklm-prep-bot/.env
+```
+
+Пример содержимого:
+
+```env
+BOT_TOKEN=...
+GROQ_API_KEY=...
+GEMINI_API_KEY=...
+```
+
+### 5. Установите systemd-сервис
+
+```bash
+cd /home/ubuntu/notebooklm-prep-bot
+sudo cp deploy/notebooklm-bot.service /etc/systemd/system/notebooklm-bot.service
+sudo systemctl daemon-reload
+sudo systemctl enable notebooklm-bot
+sudo systemctl start notebooklm-bot
+```
+
+### 6. Управление сервисом
+
+```bash
+sudo systemctl start notebooklm-bot
+sudo systemctl stop notebooklm-bot
+sudo systemctl restart notebooklm-bot
+sudo systemctl status notebooklm-bot
+```
+
+### 7. Просмотр логов
+
+```bash
+journalctl -u notebooklm-bot -f
+```
+
+### 8. Обновление после новых коммитов
+
+```bash
+cd /home/ubuntu/notebooklm-prep-bot
+./deploy/update.sh
+```
+
+## Структура deploy
+
+- `deploy/setup.sh` — первичная установка проекта на Ubuntu VPS
+- `deploy/notebooklm-bot.service` — systemd unit для автозапуска
+- `deploy/update.sh` — обновление проекта и перезапуск сервиса
+
 ## Технологии
 
 - Python 3.11
 - aiogram 3.x
-- Groq Whisper API (через OpenAI-совместимый клиент)
+- Groq Whisper API
 - Google Gemini API
+- ffmpeg
