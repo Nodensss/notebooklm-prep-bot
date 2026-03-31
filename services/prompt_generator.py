@@ -5,6 +5,7 @@ import logging
 import google.generativeai as genai
 
 from config import GEMINI_API_KEY
+from services.rate_limiter import gemini_limiter
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +72,11 @@ async def _generate_prompt(prompt: str, log_label: str) -> str:
 
     try:
         logger.info("Генерирую %s через Gemini...", log_label)
-        response = await model.generate_content_async(prompt)
+        response = await gemini_limiter.execute(
+            lambda: model.generate_content_async(prompt)
+        )
+    except RuntimeError:
+        raise
     except Exception as error:
         error_text = str(error)
         if "API_KEY" in error_text or "401" in error_text:

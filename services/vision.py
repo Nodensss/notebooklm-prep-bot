@@ -7,6 +7,7 @@ from pathlib import Path
 import google.generativeai as genai
 
 from config import GEMINI_API_KEY
+from services.rate_limiter import gemini_limiter
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,13 @@ async def describe_image(image_path: str) -> str:
     uploaded_file = None
     try:
         uploaded_file = await asyncio.to_thread(genai.upload_file, path=image_path)
-        response = await model.generate_content_async([VISION_PROMPT, uploaded_file])
+
+        async def _call():
+            return await model.generate_content_async([VISION_PROMPT, uploaded_file])
+
+        response = await gemini_limiter.execute(_call)
+    except RuntimeError:
+        raise
     except Exception as error:
         error_text = str(error)
         if "API_KEY" in error_text or "401" in error_text:
@@ -80,11 +87,22 @@ async def describe_image(image_path: str) -> str:
     return (response.text or "").strip()
 
 
-async def describe_images(image_paths: list[str]) -> str:
-    """Обрабатывает несколько изображений и объединяет описания в один текст."""
+async def describe_images(
+    image_paths: list[str],
+    progress_callback=None,
+) -> str:
+    """Обрабатывает несколько изображений и объединяет описания в один текст.
+
+    Args:
+        image_paths: список путей к изображениям.
+        progress_callback: опциональная async-функция(current, total) для отчёта о прогрессе.
+    """
     descriptions: list[str] = []
+    total = len(image_paths)
 
     for index, image_path in enumerate(image_paths, start=1):
+        if progress_callback:
+            await progress_callback(index, total)
         description = await describe_image(image_path)
         descriptions.append(f"Изображение {index}:\n{description}")
 
