@@ -1,6 +1,7 @@
 # Обработчик входящих видео, документов, изображений и текстовых сообщений
 
 import asyncio
+import html
 import logging
 import os
 import uuid
@@ -17,6 +18,11 @@ from aiogram.types import (
 )
 
 from services.formatter import format_for_learning, generate_notebooklm_prompt
+from services.prompt_generator import (
+    generate_infographic_prompt,
+    generate_presentation_prompt,
+    generate_video_prompt,
+)
 from services.transcribe import process_video
 from services.vision import describe_image, describe_images
 
@@ -75,6 +81,16 @@ _SECTION_INFO = {
     "practice": ("practice", "💪 Практическое задание"),
     "notebooklm_prompt": ("notebooklm_prompt", "🎙 Промпт для NotebookLM"),
 }
+
+_PROMPT_ACTIONS = {
+    "text_action_learning": "📚 Учебный пакет",
+    "text_action_presentation": "🖼 Промпт для презентации",
+    "text_action_video": "🎬 Промпт для видео",
+    "text_action_infographic": "📊 Промпт для инфографики",
+}
+
+PROMPT_COPY_CALLBACK = "copy_generated_prompt"
+CODE_BLOCK_CHUNK_SIZE = 2500
 
 
 def _check_rate_limit(user_id: int) -> bool:
@@ -138,6 +154,54 @@ def _build_keyboard() -> InlineKeyboardMarkup:
                 text="📥 Пакет для NotebookLM", callback_data="download_notebooklm"
             ),
         ],
+    ])
+
+
+def _build_text_action_keyboard(include_learning_pack: bool) -> InlineKeyboardMarkup:
+    """Создаёт клавиатуру выбора действия для присланного текста."""
+    rows: list[list[InlineKeyboardButton]] = []
+
+    if include_learning_pack:
+        rows.append([
+            InlineKeyboardButton(
+                text=_PROMPT_ACTIONS["text_action_learning"],
+                callback_data="text_action_learning",
+            )
+        ])
+
+    rows.extend([
+        [
+            InlineKeyboardButton(
+                text=_PROMPT_ACTIONS["text_action_presentation"],
+                callback_data="text_action_presentation",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text=_PROMPT_ACTIONS["text_action_video"],
+                callback_data="text_action_video",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text=_PROMPT_ACTIONS["text_action_infographic"],
+                callback_data="text_action_infographic",
+            )
+        ],
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _build_copy_prompt_keyboard() -> InlineKeyboardMarkup:
+    """Создаёт кнопку для повторной отправки промпта в виде code block."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="📋 Скопировать",
+                callback_data=PROMPT_COPY_CALLBACK,
+            )
+        ]
     ])
 
 
@@ -243,8 +307,34 @@ async def _send_long_text(message: Message, text: str) -> None:
         text = text[split_pos:].lstrip()
 
 
-async def _format_and_reply(message: Message, transcript: str,
-                            status_msg: Message) -> None:
+async def _send_code_block(message: Message, text: str) -> None:
+    """Отправляет текст в виде code block, при необходимости разбивая на части."""
+    remaining_text = text
+
+    while remaining_text:
+        if len(remaining_text) <= CODE_BLOCK_CHUNK_SIZE:
+            chunk = remaining_text
+            remaining_text = ""
+        else:
+            split_pos = remaining_text.rfind("\n", 0, CODE_BLOCK_CHUNK_SIZE)
+            if split_pos == -1:
+                split_pos = remaining_text.rfind(" ", 0, CODE_BLOCK_CHUNK_SIZE)
+            if split_pos == -1:
+                split_pos = CODE_BLOCK_CHUNK_SIZE
+
+            chunk = remaining_text[:split_pos]
+            remaining_text = remaining_text[split_pos:].lstrip()
+
+        escaped_chunk = html.escape(chunk)
+        await message.answer(f"<pre>{escaped_chunk}</pre>", parse_mode="HTML")
+
+
+async def _format_and_reply(
+    message: Message,
+    transcript: str,
+    status_msg: Message,
+    user_id: int | None = None,
+) -> None:
     """Общая логика форматирования: Gemini → inline-кнопки.
 
     Вынесено отдельно, чтобы использовать и для видео, и для текста/документов.
@@ -264,16 +354,16 @@ async def _format_and_reply(message: Message, transcript: str,
     )
 
     # Сохраняем результаты для inline-кнопок
-    user_id = message.from_user.id
-    _user_results[user_id] = {
+    target_user_id = user_id or message.from_user.id
+    _user_results[target_user_id] = {
         "transcript": transcript,
         "learning_pack": learning_pack,
         "notebooklm_prompt": notebooklm_prompt,
     }
 
     # Засчитываем обработку
-    _increment_usage(user_id)
-    remaining_limit = _get_remaining_limit(user_id)
+    _increment_usage(target_user_id)
+    remaining_limit = _get_remaining_limit(target_user_id)
 
     # Отправляем «Суть за 30 секунд» с клавиатурой
     await status_msg.edit_text(
@@ -520,15 +610,19 @@ async def _wait_and_process_media_group(media_group_id: str) -> None:
             _pending_media_group_tasks.pop(media_group_id, None)
 
 
-async def _process_text_and_reply(message: Message, text: str) -> None:
+async def _process_text_and_reply(
+    message: Message,
+    text: str,
+    user_id: int | None = None,
+) -> None:
     """Обработка текстового сообщения: сразу форматировать.
 
     Args:
         message: входящее сообщение.
         text: текст сообщения.
     """
-    user_id = message.from_user.id
-    if not _check_rate_limit(user_id):
+    target_user_id = user_id or message.from_user.id
+    if not _check_rate_limit(target_user_id):
         await message.answer(
             "⛔ Лимит на сегодня исчерпан. Завтра можно снова!"
         )
@@ -537,7 +631,12 @@ async def _process_text_and_reply(message: Message, text: str) -> None:
     status_msg = await message.answer("📄 Обрабатываю текст...")
 
     try:
-        await _format_and_reply(message, text, status_msg)
+        await _format_and_reply(
+            message,
+            text,
+            status_msg,
+            user_id=target_user_id,
+        )
 
     except (ValueError, RuntimeError) as e:
         logger.error("Ошибка обработки текста: %s", e)
@@ -550,7 +649,122 @@ async def _process_text_and_reply(message: Message, text: str) -> None:
         )
 
 
+def _get_prompt_generator(action: str):
+    """Возвращает генератор промпта и человекочитаемый заголовок."""
+    if action == "text_action_presentation":
+        return generate_presentation_prompt, "Промпт для презентации"
+    if action == "text_action_video":
+        return generate_video_prompt, "Промпт для видео"
+    if action == "text_action_infographic":
+        return generate_infographic_prompt, "Промпт для инфографики"
+    return None, ""
+
+
+async def _process_prompt_and_reply(
+    message: Message,
+    user_id: int,
+    pending_text: str,
+    action: str,
+) -> None:
+    """Генерирует специализированный промпт и отправляет его пользователю."""
+    if not _check_rate_limit(user_id):
+        await message.answer(
+            "⛔ Лимит на сегодня исчерпан. Завтра можно снова!"
+        )
+        return
+
+    generator, prompt_title = _get_prompt_generator(action)
+    if generator is None:
+        await message.answer("⚠️ Неизвестный режим генерации.")
+        return
+
+    status_msg = await message.answer("⏳ Генерирую промпт...")
+
+    try:
+        prompt_text = await generator(pending_text)
+        if not prompt_text:
+            await status_msg.edit_text("⚠️ Не удалось сгенерировать промпт.")
+            return
+
+        state = _user_results.setdefault(user_id, {})
+        state["pending_text"] = pending_text
+        state["generated_prompt"] = prompt_text
+        state["generated_prompt_title"] = prompt_title
+
+        _increment_usage(user_id)
+        remaining_limit = _get_remaining_limit(user_id)
+
+        await status_msg.edit_text(
+            f"✅ {prompt_title} готов!\n"
+            f"Осталось обработок сегодня: {remaining_limit} из {DAILY_LIMIT}"
+        )
+
+        await _send_long_text(
+            message,
+            f"{prompt_title}\n\n{prompt_text}",
+        )
+        await message.answer(
+            "Если нужно быстро скопировать текст целиком, нажмите кнопку ниже.",
+            reply_markup=_build_copy_prompt_keyboard(),
+        )
+
+    except (ValueError, RuntimeError) as error:
+        logger.error("Ошибка генерации промпта: %s", error)
+        await status_msg.edit_text(f"❌ {error}")
+
+    except Exception:
+        logger.exception("Неожиданная ошибка при генерации промпта")
+        await status_msg.edit_text(
+            "❌ Произошла непредвиденная ошибка. Попробуйте позже."
+        )
+
+
 # --- Callback-обработчики для inline-кнопок ---
+
+
+@router.callback_query(F.data.in_(set(_PROMPT_ACTIONS.keys())))
+async def handle_text_action_callback(callback: CallbackQuery) -> None:
+    """Обрабатывает выбор действия для присланного текста."""
+    await callback.answer()
+
+    user_data = _user_results.get(callback.from_user.id)
+    pending_text = (user_data or {}).get("pending_text", "")
+    if not pending_text:
+        await callback.message.answer(
+            "⚠️ Текст для обработки не найден. Отправьте описание заново."
+        )
+        return
+
+    if callback.data == "text_action_learning":
+        await _process_text_and_reply(
+            callback.message,
+            pending_text,
+            user_id=callback.from_user.id,
+        )
+        return
+
+    await _process_prompt_and_reply(
+        callback.message,
+        callback.from_user.id,
+        pending_text,
+        callback.data,
+    )
+
+
+@router.callback_query(F.data == PROMPT_COPY_CALLBACK)
+async def handle_copy_prompt_callback(callback: CallbackQuery) -> None:
+    """Отправляет сгенерированный промпт в виде code block."""
+    await callback.answer()
+
+    user_data = _user_results.get(callback.from_user.id)
+    prompt_text = (user_data or {}).get("generated_prompt", "")
+    if not prompt_text:
+        await callback.message.answer(
+            "⚠️ Сначала сгенерируйте промпт, а потом копируйте его."
+        )
+        return
+
+    await _send_code_block(callback.message, prompt_text)
 
 
 @router.callback_query(F.data.in_(set(_SECTION_INFO.keys())))
@@ -714,21 +928,25 @@ async def handle_document(message: Message) -> None:
 
 @router.message(F.text)
 async def handle_text(message: Message) -> None:
-    """Обработка длинного текстового сообщения как учебного материала.
-
-    Игнорирует команды (начинаются с /) и короткие сообщения.
-    """
+    """Показывает меню действий для текстового сообщения."""
     text = message.text or ""
 
     # Не обрабатываем команды
     if text.startswith("/"):
         return
 
-    if len(text) < MIN_TEXT_LENGTH:
-        await message.answer(
-            f"Текст слишком короткий (минимум {MIN_TEXT_LENGTH} символов). "
-            "Отправьте более развёрнутый материал или видео/документ."
-        )
-        return
+    user_state = _user_results.setdefault(message.from_user.id, {})
+    user_state["pending_text"] = text
 
-    await _process_text_and_reply(message, text)
+    include_learning_pack = len(text) >= MIN_TEXT_LENGTH
+    menu_text = "Что сделать с этим текстом?"
+    if not include_learning_pack:
+        menu_text += (
+            f"\n\nТекст короче {MIN_TEXT_LENGTH} символов, поэтому доступна "
+            "только генерация промптов."
+        )
+
+    await message.answer(
+        menu_text,
+        reply_markup=_build_text_action_keyboard(include_learning_pack),
+    )
