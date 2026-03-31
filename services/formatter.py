@@ -7,7 +7,7 @@ from config import GEMINI_API_KEY
 
 logger = logging.getLogger(__name__)
 
-GEMINI_MODEL = "gemini-2.5-flash-preview-04-17"
+GEMINI_MODEL = "gemini-2.5-flash"
 
 LEARNING_PACK_PROMPT = """\
 Ты — эксперт по обучению и быстрому усвоению материала.

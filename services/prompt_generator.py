@@ -8,7 +8,7 @@ from config import GEMINI_API_KEY
 
 logger = logging.getLogger(__name__)
 
-GEMINI_MODEL = "gemini-2.5-flash-preview-04-17"
+GEMINI_MODEL = "gemini-2.5-flash"
 
 PRESENTATION_PROMPT = """\
 Ты — эксперт по созданию презентаций. На основе описания пользователя создай детальный промпт для генерации презентации.
