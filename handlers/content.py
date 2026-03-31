@@ -74,6 +74,7 @@ _pending_media_group_tasks: dict[str, asyncio.Task[None]] = {}
 
 # Маппинг callback-данных на ключи результатов и заголовки
 _SECTION_INFO = {
+    "source_text": ("transcript", "🧾 Исходный текст / OCR"),
     "key_points": ("key_points", "📋 Ключевые тезисы"),
     "plan": ("plan", "📝 План видео"),
     "quiz": ("quiz", "❓ Вопросы для самопроверки"),
@@ -134,6 +135,12 @@ def _get_remaining_limit(user_id: int) -> int:
 def _build_keyboard() -> InlineKeyboardMarkup:
     """Создаёт inline-клавиатуру с разделами учебного пакета."""
     return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="🧾 Исходный текст / OCR",
+                callback_data="source_text",
+            ),
+        ],
         [
             InlineKeyboardButton(text="📋 Тезисы", callback_data="key_points"),
             InlineKeyboardButton(text="📝 План", callback_data="plan"),
@@ -784,6 +791,8 @@ async def handle_section_callback(callback: CallbackQuery) -> None:
     # Для промпта NotebookLM берём из отдельного ключа
     if section_key == "notebooklm_prompt":
         text = user_data.get("notebooklm_prompt", "")
+    elif section_key == "transcript":
+        text = user_data.get("transcript", "")
     else:
         text = user_data["learning_pack"].get(section_key, "")
 
