@@ -1,5 +1,6 @@
-# Обработчик входящих видео, документов и текстовых сообщений
+# Обработчик входящих видео, документов, изображений и текстовых сообщений
 
+import asyncio
 import logging
 import os
 import uuid
@@ -17,6 +18,7 @@ from aiogram.types import (
 
 from services.formatter import format_for_learning, generate_notebooklm_prompt
 from services.transcribe import process_video
+from services.vision import describe_image, describe_images
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -29,6 +31,14 @@ TEXT_MIME_TYPES = {
     "text/plain",
     "application/pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+
+# Допустимые MIME-типы для изображений
+IMAGE_MIME_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
 }
 
 # Допустимые расширения файлов (запасной вариант, если MIME не определён)
@@ -51,6 +61,10 @@ _user_results: dict[int, dict] = {}
 
 # Хранилище счётчика обработок: {user_id: (дата, количество)}
 _user_usage: dict[int, tuple[date, int]] = {}
+
+# Временное хранилище альбомов изображений по media_group_id
+_pending_media_groups: dict[str, list[Message]] = {}
+_pending_media_group_tasks: dict[str, asyncio.Task[None]] = {}
 
 # Маппинг callback-данных на ключи результатов и заголовки
 _SECTION_INFO = {
@@ -196,6 +210,14 @@ def _extract_text_from_file(file_path: str) -> str:
         raise RuntimeError(f"Неподдерживаемый формат файла: {ext}")
 
 
+def _safe_remove(file_path: str) -> None:
+    """Безопасно удаляет временный файл."""
+    try:
+        os.remove(file_path)
+    except OSError:
+        pass
+
+
 async def _send_long_text(message: Message, text: str) -> None:
     """Отправляет длинный текст, разбивая на части по 4096 символов.
 
@@ -321,10 +343,7 @@ async def _process_video_and_reply(message: Message, file_id: str) -> None:
 
     finally:
         if video_path:
-            try:
-                os.remove(video_path)
-            except OSError:
-                pass
+            _safe_remove(video_path)
 
 
 async def _process_document_and_reply(message: Message, file_id: str,
@@ -373,10 +392,132 @@ async def _process_document_and_reply(message: Message, file_id: str,
 
     finally:
         if file_path:
-            try:
-                os.remove(file_path)
-            except OSError:
-                pass
+            _safe_remove(file_path)
+
+
+async def _process_image_and_reply(message: Message, file_id: str) -> None:
+    """Обработка одного изображения: скачать → описать → структурировать."""
+    user_id = message.from_user.id
+    if not _check_rate_limit(user_id):
+        await message.answer(
+            "⛔ Лимит на сегодня исчерпан. Завтра можно снова!"
+        )
+        return
+
+    status_msg = await message.answer("🖼 Обрабатываю изображение...")
+    image_path = None
+
+    try:
+        image_path = await _download_file(message.bot, file_id, default_ext=".jpg")
+        description = await describe_image(image_path)
+
+        if not description:
+            await status_msg.edit_text(
+                "⚠️ Не удалось получить описание изображения."
+            )
+            return
+
+        await _format_and_reply(message, description, status_msg)
+
+    except FileNotFoundError as error:
+        logger.error("Изображение не найдено: %s", error)
+        await status_msg.edit_text(
+            "❌ Не удалось скачать изображение. Попробуйте ещё раз."
+        )
+
+    except (ValueError, RuntimeError) as error:
+        logger.error("Ошибка обработки изображения: %s", error)
+        await status_msg.edit_text(f"❌ {error}")
+
+    except Exception:
+        logger.exception("Неожиданная ошибка при обработке изображения")
+        await status_msg.edit_text(
+            "❌ Произошла непредвиденная ошибка. Попробуйте позже."
+        )
+
+    finally:
+        if image_path:
+            _safe_remove(image_path)
+
+
+async def _process_image_group_and_reply(
+    message: Message,
+    file_ids: list[str],
+) -> None:
+    """Обработка альбома изображений как единого материала."""
+    user_id = message.from_user.id
+    if not _check_rate_limit(user_id):
+        await message.answer(
+            "⛔ Лимит на сегодня исчерпан. Завтра можно снова!"
+        )
+        return
+
+    status_msg = await message.answer("🖼 Обрабатываю изображения...")
+    image_paths: list[str] = []
+
+    try:
+        for file_id in file_ids:
+            image_path = await _download_file(
+                message.bot,
+                file_id,
+                default_ext=".jpg",
+            )
+            image_paths.append(image_path)
+
+        description = await describe_images(image_paths)
+
+        if not description:
+            await status_msg.edit_text(
+                "⚠️ Не удалось получить описание изображений."
+            )
+            return
+
+        await _format_and_reply(message, description, status_msg)
+
+    except FileNotFoundError as error:
+        logger.error("Файл изображения не найден: %s", error)
+        await status_msg.edit_text(
+            "❌ Не удалось скачать одно из изображений. Попробуйте ещё раз."
+        )
+
+    except (ValueError, RuntimeError) as error:
+        logger.error("Ошибка обработки альбома: %s", error)
+        await status_msg.edit_text(f"❌ {error}")
+
+    except Exception:
+        logger.exception("Неожиданная ошибка при обработке альбома")
+        await status_msg.edit_text(
+            "❌ Произошла непредвиденная ошибка. Попробуйте позже."
+        )
+
+    finally:
+        for image_path in image_paths:
+            _safe_remove(image_path)
+
+
+async def _wait_and_process_media_group(media_group_id: str) -> None:
+    """Ждёт завершения альбома и затем обрабатывает его одним запросом."""
+    current_task = asyncio.current_task()
+    try:
+        await asyncio.sleep(1.5)
+        messages = _pending_media_groups.pop(media_group_id, [])
+        if not messages:
+            return
+
+        file_ids = [
+            message.photo[-1].file_id
+            for message in messages
+            if message.photo
+        ]
+        if not file_ids:
+            return
+
+        await _process_image_group_and_reply(messages[0], file_ids)
+    except asyncio.CancelledError:
+        return
+    finally:
+        if _pending_media_group_tasks.get(media_group_id) is current_task:
+            _pending_media_group_tasks.pop(media_group_id, None)
 
 
 async def _process_text_and_reply(message: Message, text: str) -> None:
@@ -512,10 +653,37 @@ def _is_text_document(message: Message) -> bool:
     return mime in TEXT_MIME_TYPES or ext in TEXT_EXTENSIONS
 
 
+def _is_image_document(message: Message) -> bool:
+    """Проверяет, является ли документ изображением."""
+    if not message.document:
+        return False
+    mime = message.document.mime_type or ""
+    return mime in IMAGE_MIME_TYPES
+
+
 @router.message(F.video)
 async def handle_video(message: Message) -> None:
     """Обработка обычного видео."""
     await _process_video_and_reply(message, message.video.file_id)
+
+
+@router.message(F.photo)
+async def handle_photo(message: Message) -> None:
+    """Обработка одного изображения или альбома изображений."""
+    if message.media_group_id:
+        media_group_id = message.media_group_id
+        _pending_media_groups.setdefault(media_group_id, []).append(message)
+
+        pending_task = _pending_media_group_tasks.get(media_group_id)
+        if pending_task is not None and not pending_task.done():
+            pending_task.cancel()
+
+        _pending_media_group_tasks[media_group_id] = asyncio.create_task(
+            _wait_and_process_media_group(media_group_id)
+        )
+        return
+
+    await _process_image_and_reply(message, message.photo[-1].file_id)
 
 
 @router.message(F.video_note)
@@ -529,6 +697,8 @@ async def handle_document(message: Message) -> None:
     """Обработка документа — видео или текстового файла."""
     if message.document and message.document.mime_type in VIDEO_MIME_TYPES:
         await _process_video_and_reply(message, message.document.file_id)
+    elif _is_image_document(message):
+        await _process_image_and_reply(message, message.document.file_id)
     elif _is_text_document(message):
         await _process_document_and_reply(
             message,
@@ -538,7 +708,7 @@ async def handle_document(message: Message) -> None:
     else:
         await message.answer(
             "Поддерживаемые форматы: видео (mp4, mkv, webm), "
-            "документы (PDF, DOCX, TXT)."
+            "изображения (JPEG, PNG, WebP, GIF), документы (PDF, DOCX, TXT)."
         )
 
 
