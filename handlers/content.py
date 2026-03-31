@@ -1,0 +1,564 @@
+# Обработчик входящих видео, документов и текстовых сообщений
+
+import logging
+import os
+import uuid
+from datetime import date
+from pathlib import Path
+
+from aiogram import Bot, F, Router
+from aiogram.types import (
+    BufferedInputFile,
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
+
+from services.formatter import format_for_learning, generate_notebooklm_prompt
+from services.transcribe import process_video
+
+logger = logging.getLogger(__name__)
+router = Router()
+
+# Допустимые MIME-типы для документов с видео
+VIDEO_MIME_TYPES = {"video/mp4", "video/x-matroska", "video/webm"}
+
+# Допустимые MIME-типы для текстовых документов
+TEXT_MIME_TYPES = {
+    "text/plain",
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+
+# Допустимые расширения файлов (запасной вариант, если MIME не определён)
+TEXT_EXTENSIONS = {".txt", ".pdf", ".docx"}
+
+# Директория для временных файлов
+TMP_DIR = Path("tmp")
+
+# Максимальная длина одного сообщения Telegram
+MAX_MESSAGE_LENGTH = 4096
+
+# Минимальная длина текстового сообщения для обработки как учебного материала
+MIN_TEXT_LENGTH = 500
+
+# Лимит обработок в день на пользователя
+DAILY_LIMIT = 5
+
+# Хранилище результатов по user_id
+_user_results: dict[int, dict] = {}
+
+# Хранилище счётчика обработок: {user_id: (дата, количество)}
+_user_usage: dict[int, tuple[date, int]] = {}
+
+# Маппинг callback-данных на ключи результатов и заголовки
+_SECTION_INFO = {
+    "key_points": ("key_points", "📋 Ключевые тезисы"),
+    "plan": ("plan", "📝 План видео"),
+    "quiz": ("quiz", "❓ Вопросы для самопроверки"),
+    "cards": ("cards", "🃏 Карточки для запоминания"),
+    "practice": ("practice", "💪 Практическое задание"),
+    "notebooklm_prompt": ("notebooklm_prompt", "🎙 Промпт для NotebookLM"),
+}
+
+
+def _check_rate_limit(user_id: int) -> bool:
+    """Проверяет, не превышен ли дневной лимит обработок.
+
+    Returns:
+        True если лимит НЕ превышен и можно продолжать.
+    """
+    today = date.today()
+    usage_date, count = _user_usage.get(user_id, (today, 0))
+
+    # Новый день — сбрасываем счётчик
+    if usage_date != today:
+        return True
+
+    return count < DAILY_LIMIT
+
+
+def _increment_usage(user_id: int) -> None:
+    """Увеличивает счётчик обработок пользователя на 1."""
+    today = date.today()
+    usage_date, count = _user_usage.get(user_id, (today, 0))
+
+    if usage_date != today:
+        _user_usage[user_id] = (today, 1)
+    else:
+        _user_usage[user_id] = (today, count + 1)
+
+
+def _get_remaining_limit(user_id: int) -> int:
+    """Возвращает, сколько обработок осталось у пользователя на сегодня."""
+    today = date.today()
+    usage_date, count = _user_usage.get(user_id, (today, 0))
+
+    if usage_date != today:
+        return DAILY_LIMIT
+
+    return max(DAILY_LIMIT - count, 0)
+
+
+def _build_keyboard() -> InlineKeyboardMarkup:
+    """Создаёт inline-клавиатуру с разделами учебного пакета."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📋 Тезисы", callback_data="key_points"),
+            InlineKeyboardButton(text="📝 План", callback_data="plan"),
+        ],
+        [
+            InlineKeyboardButton(text="❓ Самопроверка", callback_data="quiz"),
+            InlineKeyboardButton(text="🃏 Карточки", callback_data="cards"),
+        ],
+        [
+            InlineKeyboardButton(text="💪 Практика", callback_data="practice"),
+            InlineKeyboardButton(
+                text="🎙 Промпт NotebookLM", callback_data="notebooklm_prompt"
+            ),
+        ],
+        [
+            InlineKeyboardButton(text="📄 Скачать всё", callback_data="download_all"),
+            InlineKeyboardButton(
+                text="📥 Пакет для NotebookLM", callback_data="download_notebooklm"
+            ),
+        ],
+    ])
+
+
+async def _download_file(bot: Bot, file_id: str, default_ext: str = ".mp4") -> str:
+    """Скачивает файл из Telegram и сохраняет во временную директорию.
+
+    Args:
+        bot: экземпляр бота.
+        file_id: идентификатор файла в Telegram.
+        default_ext: расширение по умолчанию, если не определено.
+
+    Returns:
+        Путь к скачанному файлу.
+    """
+    TMP_DIR.mkdir(exist_ok=True)
+    tg_file = await bot.get_file(file_id)
+    ext = Path(tg_file.file_path).suffix if tg_file.file_path else default_ext
+    local_path = str(TMP_DIR / f"{uuid.uuid4().hex}{ext}")
+    await bot.download_file(tg_file.file_path, local_path)
+    logger.info("Файл скачан: %s (%.1f МБ)", local_path,
+                Path(local_path).stat().st_size / 1024 / 1024)
+    return local_path
+
+
+def _extract_text_from_txt(file_path: str) -> str:
+    """Читает текст из .txt файла (UTF-8)."""
+    with open(file_path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def _extract_text_from_pdf(file_path: str) -> str:
+    """Извлекает текст из PDF через PyPDF2."""
+    from PyPDF2 import PdfReader
+
+    reader = PdfReader(file_path)
+    pages = [page.extract_text() or "" for page in reader.pages]
+    return "\n\n".join(pages).strip()
+
+
+def _extract_text_from_docx(file_path: str) -> str:
+    """Извлекает текст из DOCX через python-docx."""
+    from docx import Document
+
+    doc = Document(file_path)
+    paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+    return "\n\n".join(paragraphs).strip()
+
+
+def _extract_text_from_file(file_path: str) -> str:
+    """Определяет формат файла и извлекает текст.
+
+    Args:
+        file_path: путь к скачанному файлу.
+
+    Returns:
+        Извлечённый текст.
+
+    Raises:
+        RuntimeError: неподдерживаемый формат или ошибка чтения.
+    """
+    ext = Path(file_path).suffix.lower()
+
+    if ext == ".txt":
+        return _extract_text_from_txt(file_path)
+    elif ext == ".pdf":
+        return _extract_text_from_pdf(file_path)
+    elif ext == ".docx":
+        return _extract_text_from_docx(file_path)
+    else:
+        raise RuntimeError(f"Неподдерживаемый формат файла: {ext}")
+
+
+async def _send_long_text(message: Message, text: str) -> None:
+    """Отправляет длинный текст, разбивая на части по 4096 символов.
+
+    Разбивка идёт по границам строк, чтобы не резать слова.
+
+    Args:
+        message: сообщение для ответа.
+        text: текст для отправки.
+    """
+    while text:
+        if len(text) <= MAX_MESSAGE_LENGTH:
+            await message.answer(text)
+            break
+
+        # Ищем последний перенос строки в пределах лимита
+        split_pos = text.rfind("\n", 0, MAX_MESSAGE_LENGTH)
+        if split_pos == -1:
+            split_pos = text.rfind(" ", 0, MAX_MESSAGE_LENGTH)
+        if split_pos == -1:
+            split_pos = MAX_MESSAGE_LENGTH
+
+        await message.answer(text[:split_pos])
+        text = text[split_pos:].lstrip()
+
+
+async def _format_and_reply(message: Message, transcript: str,
+                            status_msg: Message) -> None:
+    """Общая логика форматирования: Gemini → inline-кнопки.
+
+    Вынесено отдельно, чтобы использовать и для видео, и для текста/документов.
+
+    Args:
+        message: входящее сообщение пользователя.
+        transcript: исходный текст (транскрипция или текст документа).
+        status_msg: сообщение-статус для обновления прогресса.
+    """
+    # Структурирование через Gemini
+    await status_msg.edit_text("⏳ Структурирую материал...")
+    learning_pack = await format_for_learning(transcript)
+
+    await status_msg.edit_text("⏳ Генерирую промпт для NotebookLM...")
+    notebooklm_prompt = await generate_notebooklm_prompt(
+        transcript, learning_pack
+    )
+
+    # Сохраняем результаты для inline-кнопок
+    user_id = message.from_user.id
+    _user_results[user_id] = {
+        "transcript": transcript,
+        "learning_pack": learning_pack,
+        "notebooklm_prompt": notebooklm_prompt,
+    }
+
+    # Засчитываем обработку
+    _increment_usage(user_id)
+    remaining_limit = _get_remaining_limit(user_id)
+
+    # Отправляем «Суть за 30 секунд» с клавиатурой
+    await status_msg.edit_text(
+        f"✅ Готово!\nОсталось обработок сегодня: {remaining_limit} из {DAILY_LIMIT}"
+    )
+
+    summary = learning_pack.get("summary", "")
+    summary_text = f"📌 *Суть за 30 секунд*\n\n{summary}" if summary else (
+        "Материал обработан. Выберите раздел:"
+    )
+
+    await message.answer(
+        summary_text,
+        reply_markup=_build_keyboard(),
+        parse_mode="Markdown",
+    )
+
+
+async def _process_video_and_reply(message: Message, file_id: str) -> None:
+    """Обработка видео: скачать → транскрибировать → форматировать → ответить.
+
+    Args:
+        message: входящее сообщение.
+        file_id: идентификатор файла в Telegram.
+    """
+    user_id = message.from_user.id
+    if not _check_rate_limit(user_id):
+        await message.answer(
+            "⛔ Лимит на сегодня исчерпан. Завтра можно снова!"
+        )
+        return
+
+    status_msg = await message.answer("⏳ Скачиваю видео...")
+    video_path = None
+
+    try:
+        video_path = await _download_file(message.bot, file_id)
+
+        # Извлечение аудио и транскрипция
+        await status_msg.edit_text("⏳ Извлекаю аудио...")
+        transcript = await process_video(video_path)
+
+        if not transcript:
+            await status_msg.edit_text(
+                "⚠️ Не удалось распознать речь. "
+                "Возможно, в видео нет разговорной речи."
+            )
+            return
+
+        await _format_and_reply(message, transcript, status_msg)
+
+    except FileNotFoundError as e:
+        logger.error("Файл не найден: %s", e)
+        await status_msg.edit_text(
+            "❌ Не удалось скачать видео. Попробуйте ещё раз."
+        )
+
+    except (ValueError, RuntimeError) as e:
+        logger.error("Ошибка обработки: %s", e)
+        await status_msg.edit_text(f"❌ {e}")
+
+    except Exception:
+        logger.exception("Неожиданная ошибка при обработке видео")
+        await status_msg.edit_text(
+            "❌ Произошла непредвиденная ошибка. Попробуйте позже."
+        )
+
+    finally:
+        if video_path:
+            try:
+                os.remove(video_path)
+            except OSError:
+                pass
+
+
+async def _process_document_and_reply(message: Message, file_id: str,
+                                      file_name: str) -> None:
+    """Обработка текстового документа: скачать → извлечь текст → форматировать.
+
+    Args:
+        message: входящее сообщение.
+        file_id: идентификатор файла в Telegram.
+        file_name: имя файла для определения расширения.
+    """
+    user_id = message.from_user.id
+    if not _check_rate_limit(user_id):
+        await message.answer(
+            "⛔ Лимит на сегодня исчерпан. Завтра можно снова!"
+        )
+        return
+
+    ext = Path(file_name).suffix.lower() if file_name else ""
+    status_msg = await message.answer("📄 Обрабатываю документ...")
+    file_path = None
+
+    try:
+        file_path = await _download_file(message.bot, file_id, default_ext=ext)
+
+        # Извлекаем текст из документа
+        text = _extract_text_from_file(file_path)
+
+        if not text or len(text.strip()) < 50:
+            await status_msg.edit_text(
+                "⚠️ Не удалось извлечь текст из документа или он слишком короткий."
+            )
+            return
+
+        await _format_and_reply(message, text, status_msg)
+
+    except (ValueError, RuntimeError) as e:
+        logger.error("Ошибка обработки документа: %s", e)
+        await status_msg.edit_text(f"❌ {e}")
+
+    except Exception:
+        logger.exception("Неожиданная ошибка при обработке документа")
+        await status_msg.edit_text(
+            "❌ Произошла непредвиденная ошибка. Попробуйте позже."
+        )
+
+    finally:
+        if file_path:
+            try:
+                os.remove(file_path)
+            except OSError:
+                pass
+
+
+async def _process_text_and_reply(message: Message, text: str) -> None:
+    """Обработка текстового сообщения: сразу форматировать.
+
+    Args:
+        message: входящее сообщение.
+        text: текст сообщения.
+    """
+    user_id = message.from_user.id
+    if not _check_rate_limit(user_id):
+        await message.answer(
+            "⛔ Лимит на сегодня исчерпан. Завтра можно снова!"
+        )
+        return
+
+    status_msg = await message.answer("📄 Обрабатываю текст...")
+
+    try:
+        await _format_and_reply(message, text, status_msg)
+
+    except (ValueError, RuntimeError) as e:
+        logger.error("Ошибка обработки текста: %s", e)
+        await status_msg.edit_text(f"❌ {e}")
+
+    except Exception:
+        logger.exception("Неожиданная ошибка при обработке текста")
+        await status_msg.edit_text(
+            "❌ Произошла непредвиденная ошибка. Попробуйте позже."
+        )
+
+
+# --- Callback-обработчики для inline-кнопок ---
+
+
+@router.callback_query(F.data.in_(set(_SECTION_INFO.keys())))
+async def handle_section_callback(callback: CallbackQuery) -> None:
+    """Отправляет выбранный раздел учебного пакета."""
+    await callback.answer()
+
+    user_data = _user_results.get(callback.from_user.id)
+    if not user_data:
+        await callback.message.answer(
+            "⚠️ Данные устарели. Отправьте материал заново."
+        )
+        return
+
+    section_key, title = _SECTION_INFO[callback.data]
+
+    # Для промпта NotebookLM берём из отдельного ключа
+    if section_key == "notebooklm_prompt":
+        text = user_data.get("notebooklm_prompt", "")
+    else:
+        text = user_data["learning_pack"].get(section_key, "")
+
+    if not text:
+        await callback.message.answer(f"{title}\n\nРаздел пуст.")
+        return
+
+    full_text = f"{title}\n\n{text}"
+    await _send_long_text(callback.message, full_text)
+
+
+@router.callback_query(F.data == "download_all")
+async def handle_download_all(callback: CallbackQuery) -> None:
+    """Отправляет полный учебный пакет как .txt файл."""
+    await callback.answer()
+
+    user_data = _user_results.get(callback.from_user.id)
+    if not user_data:
+        await callback.message.answer(
+            "⚠️ Данные устарели. Отправьте материал заново."
+        )
+        return
+
+    full_text = user_data["learning_pack"].get("full_text", "")
+    if not full_text:
+        await callback.message.answer("⚠️ Нет данных для скачивания.")
+        return
+
+    file_bytes = full_text.encode("utf-8")
+    document = BufferedInputFile(file_bytes, filename="учебный_пакет.txt")
+    await callback.message.answer_document(
+        document, caption="📄 Полный учебный пакет"
+    )
+
+
+@router.callback_query(F.data == "download_notebooklm")
+async def handle_download_notebooklm(callback: CallbackQuery) -> None:
+    """Отправляет пакет для NotebookLM: транскрипт + промпт-инструкция."""
+    await callback.answer()
+
+    user_data = _user_results.get(callback.from_user.id)
+    if not user_data:
+        await callback.message.answer(
+            "⚠️ Данные устарели. Отправьте материал заново."
+        )
+        return
+
+    transcript = user_data.get("transcript", "")
+    prompt = user_data.get("notebooklm_prompt", "")
+
+    # Формируем единый файл: транскрипт + инструкция
+    content = (
+        "=" * 60 + "\n"
+        "ИСХОДНЫЙ ТЕКСТ / ТРАНСКРИПТ\n"
+        "=" * 60 + "\n\n"
+        f"{transcript}\n\n"
+        "=" * 60 + "\n"
+        "ИНСТРУКЦИЯ ДЛЯ NOTEBOOKLM AUDIO OVERVIEW\n"
+        "(скопируйте в поле Customize)\n"
+        "=" * 60 + "\n\n"
+        f"{prompt}\n"
+    )
+
+    file_bytes = content.encode("utf-8")
+    document = BufferedInputFile(file_bytes, filename="notebooklm_пакет.txt")
+    await callback.message.answer_document(
+        document, caption="📥 Пакет для NotebookLM (текст + инструкция)"
+    )
+
+
+# --- Обработчики входящих сообщений ---
+
+
+def _is_text_document(message: Message) -> bool:
+    """Проверяет, является ли документ текстовым (txt/pdf/docx)."""
+    if not message.document:
+        return False
+    mime = message.document.mime_type or ""
+    name = message.document.file_name or ""
+    ext = Path(name).suffix.lower()
+    return mime in TEXT_MIME_TYPES or ext in TEXT_EXTENSIONS
+
+
+@router.message(F.video)
+async def handle_video(message: Message) -> None:
+    """Обработка обычного видео."""
+    await _process_video_and_reply(message, message.video.file_id)
+
+
+@router.message(F.video_note)
+async def handle_video_note(message: Message) -> None:
+    """Обработка видеосообщения (кружочка)."""
+    await _process_video_and_reply(message, message.video_note.file_id)
+
+
+@router.message(F.document)
+async def handle_document(message: Message) -> None:
+    """Обработка документа — видео или текстового файла."""
+    if message.document and message.document.mime_type in VIDEO_MIME_TYPES:
+        await _process_video_and_reply(message, message.document.file_id)
+    elif _is_text_document(message):
+        await _process_document_and_reply(
+            message,
+            message.document.file_id,
+            message.document.file_name or "",
+        )
+    else:
+        await message.answer(
+            "Поддерживаемые форматы: видео (mp4, mkv, webm), "
+            "документы (PDF, DOCX, TXT)."
+        )
+
+
+@router.message(F.text)
+async def handle_text(message: Message) -> None:
+    """Обработка длинного текстового сообщения как учебного материала.
+
+    Игнорирует команды (начинаются с /) и короткие сообщения.
+    """
+    text = message.text or ""
+
+    # Не обрабатываем команды
+    if text.startswith("/"):
+        return
+
+    if len(text) < MIN_TEXT_LENGTH:
+        await message.answer(
+            f"Текст слишком короткий (минимум {MIN_TEXT_LENGTH} символов). "
+            "Отправьте более развёрнутый материал или видео/документ."
+        )
+        return
+
+    await _process_text_and_reply(message, text)
