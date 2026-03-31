@@ -1,0 +1,11 @@
+run = "python bot.py"
+language = "python3"
+entrypoint = "bot.py"
+modules = ["python-3.11"]
+
+[nix]
+channel = "stable-24_05"
+
+[deployment]
+run = "python bot.py"
+deploymentTarget = "autoscale"
