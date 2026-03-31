@@ -1,8 +1,9 @@
-# Конфигурация бота — загрузка переменных окружения из .env
+# Конфигурация бота — загрузка переменных окружения из .env и Replit Secrets
 
 import os
 from dotenv import load_dotenv
 
+# Поддерживаются и локальный .env, и Replit Secrets через переменные окружения.
 load_dotenv()
 
 # Токен Telegram-бота

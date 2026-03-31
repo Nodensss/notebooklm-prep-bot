@@ -139,6 +139,30 @@ cd /home/ubuntu/notebooklm-prep-bot
 ./deploy/update.sh
 ```
 
+## Деплой на Replit
+
+1. Зайдите на `replit.com`
+2. Нажмите `Create Repl` → `Import from GitHub`
+3. Вставьте URL репозитория:
+
+```text
+https://github.com/Nodensss/notebooklm-prep-bot
+```
+
+4. После импорта откройте `Tools` → `Secrets` и добавьте:
+
+- `BOT_TOKEN`
+- `GROQ_API_KEY`
+- `GEMINI_API_KEY`
+
+5. Нажмите `Run`
+6. Для постоянной работы откройте настройки Repl и включите `Always On`
+
+В проекте уже есть:
+
+- `.replit` — команда запуска и настройки deployment
+- `replit.nix` — зависимости `python311` и `ffmpeg`
+
 ## Структура deploy
 
 - `deploy/setup.sh` — первичная установка проекта на Ubuntu VPS
