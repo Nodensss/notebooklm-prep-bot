@@ -103,6 +103,7 @@ _PROMPT_ACTIONS = {
 }
 
 PROMPT_COPY_CALLBACK = "copy_generated_prompt"
+SOURCE_TEXT_EXPORT_CALLBACK = "export_source_text"
 CODE_BLOCK_CHUNK_SIZE = 2500
 
 
@@ -151,6 +152,10 @@ def _build_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(
                 text="🧾 Исходный текст / OCR",
                 callback_data="source_text",
+            ),
+            InlineKeyboardButton(
+                text="📄 Исходник .txt",
+                callback_data=SOURCE_TEXT_EXPORT_CALLBACK,
             ),
         ],
         [
@@ -378,6 +383,18 @@ async def _send_code_block(message: Message, text: str) -> None:
 
         escaped_chunk = html.escape(chunk)
         await message.answer(f"<pre>{escaped_chunk}</pre>", parse_mode="HTML")
+
+
+async def _send_text_as_document(
+    message: Message,
+    text: str,
+    filename: str,
+    caption: str,
+) -> None:
+    """Отправляет полный текст одним .txt файлом."""
+    file_bytes = text.encode("utf-8")
+    document = BufferedInputFile(file_bytes, filename=filename)
+    await message.answer_document(document, caption=caption)
 
 
 async def _format_and_reply(
@@ -802,7 +819,29 @@ async def handle_copy_prompt_callback(callback: CallbackQuery) -> None:
 
     await _send_code_block(callback.message, prompt_text)
 
+@router.callback_query(F.data == SOURCE_TEXT_EXPORT_CALLBACK)
+async def handle_source_text_export_callback(callback: CallbackQuery) -> None:
+    """Отдаёт исходный текст целиком без разбиения на множество сообщений."""
+    await callback.answer()
 
+    user_data = _user_results.get(callback.from_user.id)
+    source_text = (user_data or {}).get("transcript", "")
+    if not source_text:
+        await callback.message.answer(
+            "⚠️ Исходный текст не найден. Отправьте материал заново."
+        )
+        return
+
+    if len(source_text) <= CODE_BLOCK_CHUNK_SIZE:
+        await _send_code_block(callback.message, source_text)
+        return
+
+    await _send_text_as_document(
+        callback.message,
+        source_text,
+        filename="исходный_текст.txt",
+        caption="📄 Полный исходный текст / OCR одним файлом",
+    )
 @router.callback_query(F.data == IMAGE_BATCH_DONE_CALLBACK)
 async def handle_image_batch_done_callback(callback: CallbackQuery) -> None:
     """Запускает обработку накопленной серии изображений."""
