@@ -1,10 +1,10 @@
 # Обработчик входящих видео, документов, изображений и текстовых сообщений
 
-import asyncio
 import html
 import logging
 import os
 import uuid
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
@@ -68,9 +68,21 @@ _user_results: dict[int, dict] = {}
 # Хранилище счётчика обработок: {user_id: (дата, количество)}
 _user_usage: dict[int, tuple[date, int]] = {}
 
-# Временное хранилище альбомов изображений по media_group_id
-_pending_media_groups: dict[str, list[Message]] = {}
-_pending_media_group_tasks: dict[str, asyncio.Task[None]] = {}
+@dataclass
+class PendingImageBatch:
+    """Буфер изображений пользователя до завершения загрузки серии."""
+
+    anchor_message: Message
+    file_ids: list[str] = field(default_factory=list)
+    seen_message_ids: set[int] = field(default_factory=set)
+    status_message: Message | None = None
+
+
+# Временное хранилище изображений по связке чат + пользователь
+_pending_image_batches: dict[tuple[int, int], PendingImageBatch] = {}
+
+IMAGE_BATCH_DONE_CALLBACK = "image_batch_done"
+IMAGE_BATCH_CLEAR_CALLBACK = "image_batch_clear"
 
 # Маппинг callback-данных на ключи результатов и заголовки
 _SECTION_INFO = {
@@ -210,6 +222,38 @@ def _build_copy_prompt_keyboard() -> InlineKeyboardMarkup:
             )
         ]
     ])
+
+
+def _build_image_batch_keyboard() -> InlineKeyboardMarkup:
+    """Создаёт кнопки управления очередью изображений."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="✅ Готово",
+                callback_data=IMAGE_BATCH_DONE_CALLBACK,
+            ),
+            InlineKeyboardButton(
+                text="🗑 Очистить",
+                callback_data=IMAGE_BATCH_CLEAR_CALLBACK,
+            ),
+        ]
+    ])
+
+
+def _build_image_batch_wait_text(count: int) -> str:
+    """Формирует статус ручного ожидания серии изображений."""
+    if count <= 1:
+        return (
+            "📥 Получил 1 изображение.\n"
+            "Если хочешь отправить ещё фото, просто досылай их.\n"
+            "Когда закончишь, нажми «Готово»."
+        )
+
+    return (
+        f"📥 Получено изображений: {count}\n"
+        "Можешь продолжать загрузку.\n"
+        "Когда закончишь, нажми «Готово»."
+    )
 
 
 async def _download_file(bot: Bot, file_id: str, default_ext: str = ".mp4") -> str:
@@ -493,55 +537,16 @@ async def _process_document_and_reply(message: Message, file_id: str,
 
 
 async def _process_image_and_reply(message: Message, file_id: str) -> None:
-    """Обработка одного изображения: скачать → описать → структурировать."""
-    user_id = message.from_user.id
-    if not _check_rate_limit(user_id):
-        await message.answer(
-            "⛔ Лимит на сегодня исчерпан. Завтра можно снова!"
-        )
-        return
-
-    status_msg = await message.answer("🖼 Обрабатываю изображение...")
-    image_path = None
-
-    try:
-        image_path = await _download_file(message.bot, file_id, default_ext=".jpg")
-        description = await describe_image(image_path)
-
-        if not description:
-            await status_msg.edit_text(
-                "⚠️ Не удалось получить описание изображения."
-            )
-            return
-
-        await _format_and_reply(message, description, status_msg)
-
-    except FileNotFoundError as error:
-        logger.error("Изображение не найдено: %s", error)
-        await status_msg.edit_text(
-            "❌ Не удалось скачать изображение. Попробуйте ещё раз."
-        )
-
-    except (ValueError, RuntimeError) as error:
-        logger.error("Ошибка обработки изображения: %s", error)
-        await status_msg.edit_text(f"❌ {error}")
-
-    except Exception:
-        logger.exception("Неожиданная ошибка при обработке изображения")
-        await status_msg.edit_text(
-            "❌ Произошла непредвиденная ошибка. Попробуйте позже."
-        )
-
-    finally:
-        if image_path:
-            _safe_remove(image_path)
+    """Добавляет изображение в очередь и ждёт явного подтверждения."""
+    await _queue_image_for_batch(message, file_id)
 
 
 async def _process_image_group_and_reply(
     message: Message,
     file_ids: list[str],
+    status_msg: Message | None = None,
 ) -> None:
-    """Обработка альбома изображений как единого материала."""
+    """Обработка серии изображений как единого материала."""
     user_id = message.from_user.id
     if not _check_rate_limit(user_id):
         await message.answer(
@@ -550,12 +555,20 @@ async def _process_image_group_and_reply(
         return
 
     count = len(file_ids)
+    image_label = "изображение" if count == 1 else "изображений"
     note = ""
     if count > 10:
         note = "\n⏳ Много изображений — обработка займёт пару минут."
-    status_msg = await message.answer(
-        f"🖼 Обрабатываю {count} изображений...{note}"
-    )
+
+    if status_msg is None:
+        status_msg = await message.answer(
+            f"🖼 Обрабатываю {count} {image_label}...{note}"
+        )
+    else:
+        await status_msg.edit_text(
+            f"🖼 Обрабатываю {count} {image_label}...{note}"
+        )
+
     image_paths: list[str] = []
 
     try:
@@ -606,30 +619,32 @@ async def _process_image_group_and_reply(
             _safe_remove(image_path)
 
 
-async def _wait_and_process_media_group(media_group_id: str) -> None:
-    """Ждёт завершения альбома и затем обрабатывает его одним запросом."""
-    current_task = asyncio.current_task()
-    try:
-        await asyncio.sleep(1.5)
-        messages = _pending_media_groups.pop(media_group_id, [])
-        if not messages:
-            return
+async def _queue_image_for_batch(message: Message, file_id: str) -> None:
+    """Складывает изображения в общий буфер до нажатия кнопки."""
+    session_key = (message.chat.id, message.from_user.id)
+    batch = _pending_image_batches.get(session_key)
+    if batch is None:
+        batch = PendingImageBatch(anchor_message=message)
+        _pending_image_batches[session_key] = batch
 
-        file_ids = [
-            message.photo[-1].file_id
-            for message in messages
-            if message.photo
-        ]
-        if not file_ids:
-            return
+    if message.message_id not in batch.seen_message_ids:
+        batch.seen_message_ids.add(message.message_id)
+        batch.file_ids.append(file_id)
 
-        await _process_image_group_and_reply(messages[0], file_ids)
-    except asyncio.CancelledError:
-        return
-    finally:
-        if _pending_media_group_tasks.get(media_group_id) is current_task:
-            _pending_media_group_tasks.pop(media_group_id, None)
-
+    status_text = _build_image_batch_wait_text(len(batch.file_ids))
+    if batch.status_message is None:
+        batch.status_message = await message.answer(
+            status_text,
+            reply_markup=_build_image_batch_keyboard(),
+        )
+    else:
+        try:
+            await batch.status_message.edit_text(
+                status_text,
+                reply_markup=_build_image_batch_keyboard(),
+            )
+        except Exception:
+            pass
 
 async def _process_text_and_reply(
     message: Message,
@@ -788,6 +803,55 @@ async def handle_copy_prompt_callback(callback: CallbackQuery) -> None:
     await _send_code_block(callback.message, prompt_text)
 
 
+@router.callback_query(F.data == IMAGE_BATCH_DONE_CALLBACK)
+async def handle_image_batch_done_callback(callback: CallbackQuery) -> None:
+    """Запускает обработку накопленной серии изображений."""
+    session_key = (callback.message.chat.id, callback.from_user.id)
+    batch = _pending_image_batches.pop(session_key, None)
+
+    if batch is None or not batch.file_ids:
+        await callback.answer("Очередь изображений уже пуста.", show_alert=True)
+        return
+
+    await callback.answer("Запускаю обработку...")
+
+    status_message = batch.status_message or callback.message
+    try:
+        await status_message.edit_text(
+            f"🖼 Запускаю обработку {len(batch.file_ids)} изображений..."
+        )
+    except Exception:
+        pass
+
+    await _process_image_group_and_reply(
+        batch.anchor_message,
+        batch.file_ids,
+        status_msg=status_message,
+    )
+
+
+@router.callback_query(F.data == IMAGE_BATCH_CLEAR_CALLBACK)
+async def handle_image_batch_clear_callback(callback: CallbackQuery) -> None:
+    """Очищает очередь накопленных изображений без обработки."""
+    session_key = (callback.message.chat.id, callback.from_user.id)
+    batch = _pending_image_batches.pop(session_key, None)
+
+    if batch is None or not batch.file_ids:
+        await callback.answer("Тут уже нечего очищать.", show_alert=True)
+        return
+
+    await callback.answer("Очередь очищена")
+
+    status_message = batch.status_message or callback.message
+    try:
+        await status_message.edit_text(
+            "🗑 Очередь изображений очищена.\n"
+            "Можешь отправить новую серию заново."
+        )
+    except Exception:
+        pass
+
+
 @router.callback_query(F.data.in_(set(_SECTION_INFO.keys())))
 async def handle_section_callback(callback: CallbackQuery) -> None:
     """Отправляет выбранный раздел учебного пакета."""
@@ -906,20 +970,7 @@ async def handle_video(message: Message) -> None:
 
 @router.message(F.photo)
 async def handle_photo(message: Message) -> None:
-    """Обработка одного изображения или альбома изображений."""
-    if message.media_group_id:
-        media_group_id = message.media_group_id
-        _pending_media_groups.setdefault(media_group_id, []).append(message)
-
-        pending_task = _pending_media_group_tasks.get(media_group_id)
-        if pending_task is not None and not pending_task.done():
-            pending_task.cancel()
-
-        _pending_media_group_tasks[media_group_id] = asyncio.create_task(
-            _wait_and_process_media_group(media_group_id)
-        )
-        return
-
+    """Складывает фото в общую серию и ждёт окончания загрузки."""
     await _process_image_and_reply(message, message.photo[-1].file_id)
 
 
@@ -935,7 +986,7 @@ async def handle_document(message: Message) -> None:
     if message.document and message.document.mime_type in VIDEO_MIME_TYPES:
         await _process_video_and_reply(message, message.document.file_id)
     elif _is_image_document(message):
-        await _process_image_and_reply(message, message.document.file_id)
+        await _queue_image_for_batch(message, message.document.file_id)
     elif _is_text_document(message):
         await _process_document_and_reply(
             message,
