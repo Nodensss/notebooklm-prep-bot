@@ -67,7 +67,12 @@ def _guess_mime_type(image_path: str) -> str:
     return "image/jpeg"
 
 
-def build_openrouter_error(error: Exception, context: str) -> RuntimeError:
+def build_openrouter_error(
+    error: Exception,
+    context: str,
+    *,
+    model: str | None = None,
+) -> RuntimeError:
     """Преобразует сырую ошибку OpenRouter в понятное сообщение."""
     error_text = str(error)
     normalized_text = error_text.lower()
@@ -81,8 +86,10 @@ def build_openrouter_error(error: Exception, context: str) -> RuntimeError:
         return RuntimeError("Неверный OPENROUTER_API_KEY. Проверьте ключ в .env")
 
     if "402" in error_text or "insufficient credits" in normalized_text:
+        model_hint = f" Текущая модель: {model}." if model else ""
         return RuntimeError(
             "Недостаточно кредитов OpenRouter. Пополните баланс или выберите более дешёвую модель."
+            f"{model_hint} Проверьте OPENROUTER_TEXT_MODEL / OPENROUTER_VISION_MODEL в .env."
         )
 
     return RuntimeError(f"{context}: {error_text}")

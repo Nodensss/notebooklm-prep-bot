@@ -175,6 +175,38 @@ https://github.com/Nodensss/notebooklm-prep-bot
 - `deploy/notebooklm-bot.service` — systemd unit для автозапуска
 - `deploy/update.sh` — обновление проекта и перезапуск сервиса
 
+
+## Новая структура проекта
+
+```text
+notebooklm-prep-bot/
+├── bot.py                    # точка входа бота
+├── config.py                 # переменные окружения и настройки моделей
+├── handlers/                 # обработчики Telegram-сообщений и callback-кнопок
+│   ├── start.py
+│   └── content.py
+├── services/                 # интеграции с API и бизнес-логика
+│   ├── transcribe.py         # видео -> аудио -> транскрипция
+│   ├── vision.py             # OCR/описание изображений через OpenRouter Vision
+│   ├── formatter.py          # учебный пакет + prompt для NotebookLM
+│   ├── prompt_generator.py   # отдельные prompt-режимы (презентация/видео/инфографика)
+│   ├── openrouter_client.py  # общий OpenRouter клиент и ошибки
+│   └── rate_limiter.py
+└── deploy/                   # VPS/systemd скрипты деплоя
+```
+
+## Почему появляется ошибка «Недостаточно кредитов OpenRouter»
+
+Эта ошибка приходит от OpenRouter (HTTP 402 / `insufficient credits`) и не связана с Telegram-лимитом бота.
+
+Проверьте:
+
+1. Баланс аккаунта OpenRouter и лимиты ключа.
+2. Значения `OPENROUTER_TEXT_MODEL` и `OPENROUTER_VISION_MODEL` в `.env` — более дорогие модели быстрее расходуют баланс.
+3. Что для OCR используется модель с поддержкой изображений (multimodal).
+
+Бот теперь дополнительно показывает текущую модель в тексте ошибки, чтобы быстрее понять причину.
+
 ## Технологии
 
 - Python 3.11

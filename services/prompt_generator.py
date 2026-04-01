@@ -2,6 +2,7 @@
 
 import logging
 
+from config import OPENROUTER_TEXT_MODEL
 from services.openrouter_client import (
     PROMPT_MAX_TOKENS,
     build_openrouter_error,
@@ -82,6 +83,7 @@ async def _generate_prompt(prompt: str, log_label: str) -> str:
         raise build_openrouter_error(
             error,
             "Ошибка генерации промпта через OpenRouter",
+            model=OPENROUTER_TEXT_MODEL,
         ) from error
 
     return response_text.strip()
