@@ -1,6 +1,5 @@
 # Обработчик входящих видео, документов, изображений и текстовых сообщений
 
-import asyncio
 import html
 import logging
 import os
@@ -63,9 +62,6 @@ MIN_TEXT_LENGTH = 500
 # Лимит обработок в день на пользователя
 DAILY_LIMIT = 5
 
-# Сколько ждать после последнего изображения, прежде чем запускать обработку
-IMAGE_BATCH_IDLE_SECONDS = 8.0
-
 # Хранилище результатов по user_id
 _user_results: dict[int, dict] = {}
 
@@ -84,7 +80,9 @@ class PendingImageBatch:
 
 # Временное хранилище изображений по связке чат + пользователь
 _pending_image_batches: dict[tuple[int, int], PendingImageBatch] = {}
-_pending_image_batch_tasks: dict[tuple[int, int], asyncio.Task[None]] = {}
+
+IMAGE_BATCH_DONE_CALLBACK = "image_batch_done"
+IMAGE_BATCH_CLEAR_CALLBACK = "image_batch_clear"
 
 # Маппинг callback-данных на ключи результатов и заголовки
 _SECTION_INFO = {
@@ -226,18 +224,35 @@ def _build_copy_prompt_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
+def _build_image_batch_keyboard() -> InlineKeyboardMarkup:
+    """Создаёт кнопки управления очередью изображений."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="✅ Готово",
+                callback_data=IMAGE_BATCH_DONE_CALLBACK,
+            ),
+            InlineKeyboardButton(
+                text="🗑 Очистить",
+                callback_data=IMAGE_BATCH_CLEAR_CALLBACK,
+            ),
+        ]
+    ])
+
+
 def _build_image_batch_wait_text(count: int) -> str:
-    """Формирует статус ожидания серии изображений."""
+    """Формирует статус ручного ожидания серии изображений."""
     if count <= 1:
         return (
-            "📥 Получаю изображения...\n"
+            "📥 Получил 1 изображение.\n"
             "Если хочешь отправить ещё фото, просто досылай их.\n"
-            f"Начну обработку через {int(IMAGE_BATCH_IDLE_SECONDS)} сек после последнего файла."
+            "Когда закончишь, нажми «Готово»."
         )
 
     return (
-        f"📥 Получаю изображения... Уже получено: {count}\n"
-        f"Начну обработку через {int(IMAGE_BATCH_IDLE_SECONDS)} сек после последнего файла."
+        f"📥 Получено изображений: {count}\n"
+        "Можешь продолжать загрузку.\n"
+        "Когда закончишь, нажми «Готово»."
     )
 
 
@@ -522,7 +537,7 @@ async def _process_document_and_reply(message: Message, file_id: str,
 
 
 async def _process_image_and_reply(message: Message, file_id: str) -> None:
-    """Добавляет изображение в очередь и ждёт окончания серии."""
+    """Добавляет изображение в очередь и ждёт явного подтверждения."""
     await _queue_image_for_batch(message, file_id)
 
 
@@ -605,7 +620,7 @@ async def _process_image_group_and_reply(
 
 
 async def _queue_image_for_batch(message: Message, file_id: str) -> None:
-    """Складывает изображения в общий буфер и перезапускает таймер ожидания."""
+    """Складывает изображения в общий буфер до нажатия кнопки."""
     session_key = (message.chat.id, message.from_user.id)
     batch = _pending_image_batches.get(session_key)
     if batch is None:
@@ -618,44 +633,18 @@ async def _queue_image_for_batch(message: Message, file_id: str) -> None:
 
     status_text = _build_image_batch_wait_text(len(batch.file_ids))
     if batch.status_message is None:
-        batch.status_message = await message.answer(status_text)
+        batch.status_message = await message.answer(
+            status_text,
+            reply_markup=_build_image_batch_keyboard(),
+        )
     else:
         try:
-            await batch.status_message.edit_text(status_text)
+            await batch.status_message.edit_text(
+                status_text,
+                reply_markup=_build_image_batch_keyboard(),
+            )
         except Exception:
             pass
-
-    pending_task = _pending_image_batch_tasks.get(session_key)
-    if pending_task is not None and not pending_task.done():
-        pending_task.cancel()
-
-    _pending_image_batch_tasks[session_key] = asyncio.create_task(
-        _wait_and_process_image_batch(session_key)
-    )
-
-
-async def _wait_and_process_image_batch(
-    session_key: tuple[int, int],
-) -> None:
-    """Ждёт паузу после последнего изображения и обрабатывает всю серию."""
-    current_task = asyncio.current_task()
-    try:
-        await asyncio.sleep(IMAGE_BATCH_IDLE_SECONDS)
-        batch = _pending_image_batches.pop(session_key, None)
-        if batch is None or not batch.file_ids:
-            return
-
-        await _process_image_group_and_reply(
-            batch.anchor_message,
-            batch.file_ids,
-            status_msg=batch.status_message,
-        )
-    except asyncio.CancelledError:
-        return
-    finally:
-        if _pending_image_batch_tasks.get(session_key) is current_task:
-            _pending_image_batch_tasks.pop(session_key, None)
-
 
 async def _process_text_and_reply(
     message: Message,
@@ -812,6 +801,55 @@ async def handle_copy_prompt_callback(callback: CallbackQuery) -> None:
         return
 
     await _send_code_block(callback.message, prompt_text)
+
+
+@router.callback_query(F.data == IMAGE_BATCH_DONE_CALLBACK)
+async def handle_image_batch_done_callback(callback: CallbackQuery) -> None:
+    """Запускает обработку накопленной серии изображений."""
+    session_key = (callback.message.chat.id, callback.from_user.id)
+    batch = _pending_image_batches.pop(session_key, None)
+
+    if batch is None or not batch.file_ids:
+        await callback.answer("Очередь изображений уже пуста.", show_alert=True)
+        return
+
+    await callback.answer("Запускаю обработку...")
+
+    status_message = batch.status_message or callback.message
+    try:
+        await status_message.edit_text(
+            f"🖼 Запускаю обработку {len(batch.file_ids)} изображений..."
+        )
+    except Exception:
+        pass
+
+    await _process_image_group_and_reply(
+        batch.anchor_message,
+        batch.file_ids,
+        status_msg=status_message,
+    )
+
+
+@router.callback_query(F.data == IMAGE_BATCH_CLEAR_CALLBACK)
+async def handle_image_batch_clear_callback(callback: CallbackQuery) -> None:
+    """Очищает очередь накопленных изображений без обработки."""
+    session_key = (callback.message.chat.id, callback.from_user.id)
+    batch = _pending_image_batches.pop(session_key, None)
+
+    if batch is None or not batch.file_ids:
+        await callback.answer("Тут уже нечего очищать.", show_alert=True)
+        return
+
+    await callback.answer("Очередь очищена")
+
+    status_message = batch.status_message or callback.message
+    try:
+        await status_message.edit_text(
+            "🗑 Очередь изображений очищена.\n"
+            "Можешь отправить новую серию заново."
+        )
+    except Exception:
+        pass
 
 
 @router.callback_query(F.data.in_(set(_SECTION_INFO.keys())))
