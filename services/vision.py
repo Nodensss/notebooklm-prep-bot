@@ -1,17 +1,13 @@
-"""Сервис обработки изображений через Gemini Vision."""
+"""Сервис обработки изображений через GigaChat."""
 
-import asyncio
 import logging
 from pathlib import Path
 
-import google.generativeai as genai
-
-from config import GEMINI_API_KEY
-from services.rate_limiter import gemini_limiter
+from services.gigachat_client import VISION_MODEL, chat_with_image
+from services.rate_limiter import llm_limiter
 
 logger = logging.getLogger(__name__)
 
-GEMINI_MODEL = "gemini-2.5-flash"
 MAX_IMAGE_SIZE = 20 * 1024 * 1024
 SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 
@@ -48,55 +44,35 @@ def _validate_image(image_path: str) -> None:
 
 
 async def describe_image(image_path: str) -> str:
-    """Возвращает подробное описание изображения на русском языке."""
-    if not GEMINI_API_KEY:
-        raise ValueError("GEMINI_API_KEY не задан. Проверьте файл .env")
-
+    """Возвращает описание изображения через GigaChat Vision."""
     _validate_image(image_path)
 
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel(GEMINI_MODEL)
-
-    uploaded_file = None
     try:
-        uploaded_file = await asyncio.to_thread(genai.upload_file, path=image_path)
-
-        async def _call():
-            return await model.generate_content_async([VISION_PROMPT, uploaded_file])
-
-        response = await gemini_limiter.execute(_call)
-    except RuntimeError:
-        raise
+        return await llm_limiter.execute(
+            lambda: chat_with_image(
+                VISION_PROMPT,
+                image_path,
+                model=VISION_MODEL,
+            )
+        )
     except Exception as error:
         error_text = str(error)
-        if "API_KEY" in error_text or "401" in error_text:
+        if "401" in error_text:
             raise RuntimeError(
-                "Неверный GEMINI_API_KEY. Проверьте ключ в .env"
+                "Неверный GIGACHAT_CREDENTIALS. Проверьте ключ в .env"
             ) from error
-        raise RuntimeError(f"Ошибка Gemini Vision: {error_text}") from error
-    finally:
-        if uploaded_file is not None:
-            try:
-                await asyncio.to_thread(genai.delete_file, uploaded_file.name)
-            except Exception:
-                logger.warning(
-                    "Не удалось удалить временный файл Gemini: %s",
-                    uploaded_file.name,
-                )
 
-    return (response.text or "").strip()
+        logger.warning("Обработка изображения через GigaChat недоступна: %s", error)
+        raise RuntimeError(
+            "Обработка изображений недоступна на текущем тарифе GigaChat"
+        ) from error
 
 
 async def describe_images(
     image_paths: list[str],
     progress_callback=None,
 ) -> str:
-    """Обрабатывает несколько изображений и объединяет описания в один текст.
-
-    Args:
-        image_paths: список путей к изображениям.
-        progress_callback: опциональная async-функция(current, total) для отчёта о прогрессе.
-    """
+    """Обрабатывает несколько изображений и объединяет описания в один текст."""
     descriptions: list[str] = []
     total = len(image_paths)
 

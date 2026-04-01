@@ -3,7 +3,7 @@ import logging
 
 from aiogram import Bot, Dispatcher
 
-from config import BOT_TOKEN, GEMINI_API_KEY, GROQ_API_KEY
+from config import BOT_TOKEN, GIGACHAT_CREDENTIALS, GROQ_API_KEY
 from handlers import content, start
 
 logging.basicConfig(
@@ -18,8 +18,8 @@ async def main() -> None:
     if not BOT_TOKEN:
         raise ValueError("BOT_TOKEN не задан. Проверьте файл .env")
 
-    if not GEMINI_API_KEY:
-        raise ValueError("GEMINI_API_KEY не задан. Проверьте файл .env")
+    if not GIGACHAT_CREDENTIALS:
+        raise ValueError("GIGACHAT_CREDENTIALS не задан. Проверьте файл .env")
 
     if not GROQ_API_KEY:
         logger.warning(

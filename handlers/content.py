@@ -342,7 +342,7 @@ async def _format_and_reply(
     status_msg: Message,
     user_id: int | None = None,
 ) -> None:
-    """Общая логика форматирования: Gemini → inline-кнопки.
+    """Общая логика форматирования: GigaChat → inline-кнопки.
 
     Вынесено отдельно, чтобы использовать и для видео, и для текста/документов.
 
@@ -351,7 +351,7 @@ async def _format_and_reply(
         transcript: исходный текст (транскрипция или текст документа).
         status_msg: сообщение-статус для обновления прогресса.
     """
-    # Структурирование через Gemini
+    # Структурирование через GigaChat
     await status_msg.edit_text("⏳ Структурирую материал...")
     learning_pack = await format_for_learning(transcript)
 

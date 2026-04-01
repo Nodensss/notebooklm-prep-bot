@@ -1,15 +1,11 @@
-"""Сервис генерации специализированных промптов через Gemini API."""
+"""Сервис генерации специализированных промптов через GigaChat API."""
 
 import logging
 
-import google.generativeai as genai
-
-from config import GEMINI_API_KEY
-from services.rate_limiter import gemini_limiter
+from services.gigachat_client import TEXT_MODEL, chat_text
+from services.rate_limiter import llm_limiter
 
 logger = logging.getLogger(__name__)
-
-GEMINI_MODEL = "gemini-2.5-flash"
 
 PRESENTATION_PROMPT = """\
 Ты — эксперт по созданию презентаций. На основе описания пользователя создай детальный промпт для генерации презентации.
@@ -63,31 +59,21 @@ INFOGRAPHIC_PROMPT = """\
 
 
 async def _generate_prompt(prompt: str, log_label: str) -> str:
-    """Отправляет промпт в Gemini и возвращает сгенерированный текст."""
-    if not GEMINI_API_KEY:
-        raise ValueError("GEMINI_API_KEY не задан. Проверьте файл .env")
-
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel(GEMINI_MODEL)
-
+    """Отправляет промпт в GigaChat и возвращает сгенерированный текст."""
     try:
-        logger.info("Генерирую %s через Gemini...", log_label)
-        response = await gemini_limiter.execute(
-            lambda: model.generate_content_async(prompt)
+        logger.info("Генерирую %s через GigaChat...", log_label)
+        return await llm_limiter.execute(
+            lambda: chat_text(prompt, model=TEXT_MODEL)
         )
-    except RuntimeError:
-        raise
     except Exception as error:
         error_text = str(error)
-        if "API_KEY" in error_text or "401" in error_text:
+        if "401" in error_text:
             raise RuntimeError(
-                "Неверный GEMINI_API_KEY. Проверьте ключ в .env"
+                "Неверный GIGACHAT_CREDENTIALS. Проверьте ключ в .env"
             ) from error
         raise RuntimeError(
-            f"Ошибка генерации промпта через Gemini: {error_text}"
+            f"Ошибка генерации промпта через GigaChat: {error_text}"
         ) from error
-
-    return (response.text or "").strip()
 
 
 async def generate_presentation_prompt(user_text: str) -> str:
