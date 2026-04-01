@@ -15,7 +15,7 @@ Telegram-бот для подготовки учебных материалов 
 ### Replit
 
 - Импортируйте репозиторий через `Create Repl` → `Import from GitHub`
-- Добавьте секреты `BOT_TOKEN`, `GROQ_API_KEY`, `GEMINI_API_KEY`
+- Добавьте секреты `BOT_TOKEN`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`
 - Запускайте проект через кнопку `Run`
 - Для постоянной работы включите `Always On`
 

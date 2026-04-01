@@ -1,17 +1,17 @@
-"""Сервис обработки изображений через Gemini Vision."""
+"""Сервис обработки изображений через OpenRouter Vision."""
 
-import asyncio
 import logging
 from pathlib import Path
 
-import google.generativeai as genai
-
-from config import GEMINI_API_KEY
-from services.rate_limiter import gemini_limiter
+from services.openrouter_client import (
+    VISION_MAX_TOKENS,
+    analyze_image,
+    build_openrouter_error,
+)
+from services.rate_limiter import llm_limiter
 
 logger = logging.getLogger(__name__)
 
-GEMINI_MODEL = "gemini-2.5-flash"
 MAX_IMAGE_SIZE = 20 * 1024 * 1024
 SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 
@@ -49,42 +49,38 @@ def _validate_image(image_path: str) -> None:
 
 async def describe_image(image_path: str) -> str:
     """Возвращает подробное описание изображения на русском языке."""
-    if not GEMINI_API_KEY:
-        raise ValueError("GEMINI_API_KEY не задан. Проверьте файл .env")
-
     _validate_image(image_path)
 
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel(GEMINI_MODEL)
-
-    uploaded_file = None
     try:
-        uploaded_file = await asyncio.to_thread(genai.upload_file, path=image_path)
-
-        async def _call():
-            return await model.generate_content_async([VISION_PROMPT, uploaded_file])
-
-        response = await gemini_limiter.execute(_call)
+        return await llm_limiter.execute(
+            lambda: analyze_image(
+                VISION_PROMPT,
+                image_path,
+                system_prompt=(
+                    "Отвечай строго на русском языке. "
+                    "Сначала верни блок 'ТЕКСТ С ИЗОБРАЖЕНИЯ', затем блок "
+                    "'ОПИСАНИЕ ИЛЛЮСТРАЦИЙ'. Не добавляй переводов и лишних комментариев."
+                ),
+                max_tokens=VISION_MAX_TOKENS,
+            )
+        )
     except RuntimeError:
         raise
     except Exception as error:
-        error_text = str(error)
-        if "API_KEY" in error_text or "401" in error_text:
+        error_text = str(error).lower()
+        if (
+            "image" in error_text
+            and (
+                "unsupported" in error_text
+                or "not support" in error_text
+                or "multimodal" in error_text
+            )
+        ):
             raise RuntimeError(
-                "Неверный GEMINI_API_KEY. Проверьте ключ в .env"
+                "Выбранная модель OpenRouter не поддерживает изображения. "
+                "Укажите multimodal-модель в OPENROUTER_VISION_MODEL."
             ) from error
-        raise RuntimeError(f"Ошибка Gemini Vision: {error_text}") from error
-    finally:
-        if uploaded_file is not None:
-            try:
-                await asyncio.to_thread(genai.delete_file, uploaded_file.name)
-            except Exception:
-                logger.warning(
-                    "Не удалось удалить временный файл Gemini: %s",
-                    uploaded_file.name,
-                )
-
-    return (response.text or "").strip()
+        raise build_openrouter_error(error, "Ошибка OpenRouter Vision") from error
 
 
 async def describe_images(

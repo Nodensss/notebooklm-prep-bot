@@ -1,15 +1,15 @@
-"""Сервис генерации специализированных промптов через Gemini API."""
+"""Сервис генерации специализированных промптов через OpenRouter."""
 
 import logging
 
-import google.generativeai as genai
-
-from config import GEMINI_API_KEY
-from services.rate_limiter import gemini_limiter
+from services.openrouter_client import (
+    PROMPT_MAX_TOKENS,
+    build_openrouter_error,
+    generate_text,
+)
+from services.rate_limiter import llm_limiter
 
 logger = logging.getLogger(__name__)
-
-GEMINI_MODEL = "gemini-2.5-flash"
 
 PRESENTATION_PROMPT = """\
 Ты — эксперт по созданию презентаций. На основе описания пользователя создай детальный промпт для генерации презентации.
@@ -63,31 +63,28 @@ INFOGRAPHIC_PROMPT = """\
 
 
 async def _generate_prompt(prompt: str, log_label: str) -> str:
-    """Отправляет промпт в Gemini и возвращает сгенерированный текст."""
-    if not GEMINI_API_KEY:
-        raise ValueError("GEMINI_API_KEY не задан. Проверьте файл .env")
-
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel(GEMINI_MODEL)
-
+    """Отправляет промпт в OpenRouter и возвращает сгенерированный текст."""
     try:
-        logger.info("Генерирую %s через Gemini...", log_label)
-        response = await gemini_limiter.execute(
-            lambda: model.generate_content_async(prompt)
+        logger.info("Генерирую %s через OpenRouter...", log_label)
+        response_text = await llm_limiter.execute(
+            lambda: generate_text(
+                prompt,
+                system_prompt=(
+                    "Отвечай строго на русском языке. "
+                    "Верни только готовый промпт без служебных комментариев."
+                ),
+                max_tokens=PROMPT_MAX_TOKENS,
+            )
         )
     except RuntimeError:
         raise
     except Exception as error:
-        error_text = str(error)
-        if "API_KEY" in error_text or "401" in error_text:
-            raise RuntimeError(
-                "Неверный GEMINI_API_KEY. Проверьте ключ в .env"
-            ) from error
-        raise RuntimeError(
-            f"Ошибка генерации промпта через Gemini: {error_text}"
+        raise build_openrouter_error(
+            error,
+            "Ошибка генерации промпта через OpenRouter",
         ) from error
 
-    return (response.text or "").strip()
+    return response_text.strip()
 
 
 async def generate_presentation_prompt(user_text: str) -> str:
