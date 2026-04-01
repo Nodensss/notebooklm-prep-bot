@@ -47,7 +47,9 @@ cp .env.example .env
 
 - `BOT_TOKEN` — токен Telegram-бота от `@BotFather`
 - `GROQ_API_KEY` — ключ API Groq
-- `GEMINI_API_KEY` — ключ Google Gemini
+- `OPENROUTER_API_KEY` — ключ OpenRouter
+- `OPENROUTER_TEXT_MODEL` — модель OpenRouter для текстовых задач
+- `OPENROUTER_VISION_MODEL` — модель OpenRouter для изображений
 
 4. Убедитесь, что установлен `ffmpeg`:
 
@@ -104,7 +106,9 @@ nano /home/ubuntu/notebooklm-prep-bot/.env
 ```env
 BOT_TOKEN=...
 GROQ_API_KEY=...
-GEMINI_API_KEY=...
+OPENROUTER_API_KEY=...
+OPENROUTER_TEXT_MODEL=google/gemini-2.5-flash
+OPENROUTER_VISION_MODEL=google/gemini-2.5-flash
 ```
 
 ### 5. Установите systemd-сервис
@@ -153,7 +157,9 @@ https://github.com/Nodensss/notebooklm-prep-bot
 
 - `BOT_TOKEN`
 - `GROQ_API_KEY`
-- `GEMINI_API_KEY`
+- `OPENROUTER_API_KEY`
+- `OPENROUTER_TEXT_MODEL`
+- `OPENROUTER_VISION_MODEL`
 
 5. Нажмите `Run`
 6. Для постоянной работы откройте настройки Repl и включите `Always On`
@@ -174,5 +180,5 @@ https://github.com/Nodensss/notebooklm-prep-bot
 - Python 3.11
 - aiogram 3.x
 - Groq Whisper API
-- Google Gemini API
+- OpenRouter API
 - ffmpeg
