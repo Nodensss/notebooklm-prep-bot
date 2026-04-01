@@ -103,6 +103,7 @@ _PROMPT_ACTIONS = {
 }
 
 PROMPT_COPY_CALLBACK = "copy_generated_prompt"
+SOURCE_TEXT_COPY_CALLBACK = "copy_source_text"
 SOURCE_TEXT_EXPORT_CALLBACK = "export_source_text"
 CODE_BLOCK_CHUNK_SIZE = 2500
 
@@ -153,6 +154,12 @@ def _build_keyboard() -> InlineKeyboardMarkup:
                 text="🧾 Исходный текст / OCR",
                 callback_data="source_text",
             ),
+            InlineKeyboardButton(
+                text="📋 Скопировать OCR",
+                callback_data=SOURCE_TEXT_COPY_CALLBACK,
+            ),
+        ],
+        [
             InlineKeyboardButton(
                 text="📄 Исходник .txt",
                 callback_data=SOURCE_TEXT_EXPORT_CALLBACK,
@@ -819,9 +826,9 @@ async def handle_copy_prompt_callback(callback: CallbackQuery) -> None:
 
     await _send_code_block(callback.message, prompt_text)
 
-@router.callback_query(F.data == SOURCE_TEXT_EXPORT_CALLBACK)
-async def handle_source_text_export_callback(callback: CallbackQuery) -> None:
-    """Отдаёт исходный текст целиком без разбиения на множество сообщений."""
+@router.callback_query(F.data == SOURCE_TEXT_COPY_CALLBACK)
+async def handle_source_text_copy_callback(callback: CallbackQuery) -> None:
+    """Отправляет исходный OCR в копируемом виде, даже если он длинный."""
     await callback.answer()
 
     user_data = _user_results.get(callback.from_user.id)
@@ -832,8 +839,24 @@ async def handle_source_text_export_callback(callback: CallbackQuery) -> None:
         )
         return
 
-    if len(source_text) <= CODE_BLOCK_CHUNK_SIZE:
-        await _send_code_block(callback.message, source_text)
+    await callback.message.answer(
+        "📋 Отправляю OCR в копируемом виде. "
+        "Если текст длинный, он придёт несколькими блоками."
+    )
+    await _send_code_block(callback.message, source_text)
+
+
+@router.callback_query(F.data == SOURCE_TEXT_EXPORT_CALLBACK)
+async def handle_source_text_export_callback(callback: CallbackQuery) -> None:
+    """Отдаёт исходный текст целиком одним файлом."""
+    await callback.answer()
+
+    user_data = _user_results.get(callback.from_user.id)
+    source_text = (user_data or {}).get("transcript", "")
+    if not source_text:
+        await callback.message.answer(
+            "⚠️ Исходный текст не найден. Отправьте материал заново."
+        )
         return
 
     await _send_text_as_document(
@@ -842,6 +865,7 @@ async def handle_source_text_export_callback(callback: CallbackQuery) -> None:
         filename="исходный_текст.txt",
         caption="📄 Полный исходный текст / OCR одним файлом",
     )
+
 @router.callback_query(F.data == IMAGE_BATCH_DONE_CALLBACK)
 async def handle_image_batch_done_callback(callback: CallbackQuery) -> None:
     """Запускает обработку накопленной серии изображений."""
