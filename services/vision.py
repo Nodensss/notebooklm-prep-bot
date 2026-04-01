@@ -1,9 +1,8 @@
-"""Сервис обработки изображений через OpenRouter Vision."""
+"""Сервис обработки изображений через GitHub Models Vision."""
 
 import logging
 from pathlib import Path
 
-from config import OPENROUTER_VISION_MODEL
 from services.openrouter_client import (
     VISION_MAX_TOKENS,
     analyze_image,
@@ -75,13 +74,12 @@ async def describe_image(image_path: str) -> str:
             )
         ):
             raise RuntimeError(
-                "Выбранная модель OpenRouter не поддерживает изображения. "
-                "Укажите multimodal-модель в OPENROUTER_VISION_MODEL."
+                "Выбранная модель не поддерживает изображения. "
+                "Укажите multimodal-модель в GITHUB_VISION_MODEL."
             ) from error
         raise build_openrouter_error(
             error,
-            "Ошибка OpenRouter Vision",
-            model=OPENROUTER_VISION_MODEL,
+            "Ошибка GitHub Models Vision",
         ) from error
 
 

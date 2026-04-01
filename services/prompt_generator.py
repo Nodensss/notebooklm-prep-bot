@@ -1,8 +1,7 @@
-"""Сервис генерации специализированных промптов через OpenRouter."""
+"""Сервис генерации специализированных промптов через Groq LLM."""
 
 import logging
 
-from config import OPENROUTER_TEXT_MODEL
 from services.openrouter_client import (
     PROMPT_MAX_TOKENS,
     build_openrouter_error,
@@ -64,9 +63,9 @@ INFOGRAPHIC_PROMPT = """\
 
 
 async def _generate_prompt(prompt: str, log_label: str) -> str:
-    """Отправляет промпт в OpenRouter и возвращает сгенерированный текст."""
+    """Отправляет промпт в Groq и возвращает сгенерированный текст."""
     try:
-        logger.info("Генерирую %s через OpenRouter...", log_label)
+        logger.info("Генерирую %s через Groq...", log_label)
         response_text = await llm_limiter.execute(
             lambda: generate_text(
                 prompt,
@@ -82,8 +81,7 @@ async def _generate_prompt(prompt: str, log_label: str) -> str:
     except Exception as error:
         raise build_openrouter_error(
             error,
-            "Ошибка генерации промпта через OpenRouter",
-            model=OPENROUTER_TEXT_MODEL,
+            "Ошибка генерации промпта",
         ) from error
 
     return response_text.strip()

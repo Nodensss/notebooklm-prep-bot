@@ -1,7 +1,8 @@
+# Сервис форматирования: структурирование транскрипции через Groq LLM
+
 import logging
 import re
 
-from config import OPENROUTER_TEXT_MODEL
 from services.openrouter_client import (
     PROMPT_MAX_TOKENS,
     TEXT_MAX_TOKENS,
@@ -79,7 +80,7 @@ def _resolve_section_key(title: str) -> str | None:
 
 
 def _parse_sections(text: str) -> dict:
-    """Разбирает ответ модели по секциям и устойчиво сопоставляет заголовки."""
+    """Разбирает ответ модели по секциям."""
     result = {key: "" for key in _SECTION_KEYWORDS}
     result["full_text"] = text
 
@@ -87,33 +88,31 @@ def _parse_sections(text: str) -> dict:
         result["summary"] = text.strip()
         return result
 
-    matched_any_section = False
+    matched_any = False
     parts = re.split(r"^##+\s+", text, flags=re.MULTILINE)
 
     for part in parts:
         if not part.strip():
             continue
-
         first_line, _, body = part.partition("\n")
         section_key = _resolve_section_key(first_line.strip().rstrip("#").strip())
         if section_key is None:
             continue
-
         result[section_key] = body.strip()
-        matched_any_section = True
+        matched_any = True
 
-    if not matched_any_section:
+    if not matched_any:
         result["summary"] = text.strip()
 
     return result
 
 
 async def format_for_learning(transcript: str) -> dict:
-    """Структурирует транскрипцию в учебный пакет через OpenRouter."""
+    """Структурирует транскрипцию в учебный пакет через Groq (Llama 3.3 70B)."""
     prompt = LEARNING_PACK_PROMPT.format(transcript=transcript)
 
     try:
-        logger.info("Отправляю материал в OpenRouter для структурирования...")
+        logger.info("Отправляю материал в Groq для структурирования...")
         full_text = await llm_limiter.execute(
             lambda: generate_text(
                 prompt,
@@ -127,18 +126,14 @@ async def format_for_learning(transcript: str) -> dict:
     except RuntimeError:
         raise
     except Exception as error:
-        raise build_openrouter_error(
-            error,
-            "Ошибка OpenRouter API",
-            model=OPENROUTER_TEXT_MODEL,
-        ) from error
+        raise build_openrouter_error(error, "Ошибка Groq API") from error
 
     logger.info("Учебный пакет сгенерирован (%d символов)", len(full_text))
     return _parse_sections(full_text)
 
 
 async def generate_notebooklm_prompt(transcript: str, learning_pack: dict) -> str:
-    """Генерирует инструкцию для NotebookLM Audio Overview через OpenRouter."""
+    """Генерирует инструкцию для NotebookLM Audio Overview через Groq."""
     prompt = NOTEBOOKLM_PROMPT.format(
         transcript=transcript,
         learning_pack=learning_pack.get("full_text", ""),
@@ -159,8 +154,4 @@ async def generate_notebooklm_prompt(transcript: str, learning_pack: dict) -> st
     except RuntimeError:
         raise
     except Exception as error:
-        raise build_openrouter_error(
-            error,
-            "Ошибка генерации промпта NotebookLM через OpenRouter",
-            model=OPENROUTER_TEXT_MODEL,
-        ) from error
+        raise build_openrouter_error(error, "Ошибка генерации промпта NotebookLM") from error

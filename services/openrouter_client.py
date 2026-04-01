@@ -1,70 +1,64 @@
-"""Общие helpers для работы с OpenRouter."""
+# Универсальный LLM-клиент: Groq (текст) + GitHub Models (vision)
 
 import base64
+import logging
 from pathlib import Path
 
 from openai import AsyncOpenAI
 
 from config import (
-    OPENROUTER_API_KEY,
-    OPENROUTER_TEXT_MODEL,
-    OPENROUTER_VISION_MODEL,
+    GITHUB_TOKEN,
+    GITHUB_VISION_MODEL,
+    GROQ_API_KEY,
+    GROQ_TEXT_MODEL,
 )
 
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-OPENROUTER_HEADERS = {
-    "HTTP-Referer": "https://github.com/Nodensss/notebooklm-prep-bot",
-    "X-OpenRouter-Title": "NotebookLM Prep Bot",
-}
+logger = logging.getLogger(__name__)
 
+# Лимиты токенов для ответов
 TEXT_MAX_TOKENS = 4000
 PROMPT_MAX_TOKENS = 2000
 VISION_MAX_TOKENS = 3000
 
-_client: AsyncOpenAI | None = None
+# Ленивые клиенты
+_groq_client: AsyncOpenAI | None = None
+_github_client: AsyncOpenAI | None = None
 
 
-def _get_client() -> AsyncOpenAI:
-    """Возвращает ленивый экземпляр OpenAI-клиента для OpenRouter."""
-    global _client
-
-    if not OPENROUTER_API_KEY:
-        raise ValueError("OPENROUTER_API_KEY не задан. Проверьте файл .env")
-
-    if _client is None:
-        _client = AsyncOpenAI(
-            api_key=OPENROUTER_API_KEY,
-            base_url=OPENROUTER_BASE_URL,
+def _get_groq_client() -> AsyncOpenAI:
+    """Возвращает клиент для Groq API."""
+    global _groq_client
+    if not GROQ_API_KEY:
+        raise ValueError("GROQ_API_KEY не задан. Проверьте файл .env")
+    if _groq_client is None:
+        _groq_client = AsyncOpenAI(
+            api_key=GROQ_API_KEY,
+            base_url="https://api.groq.com/openai/v1",
         )
+    return _groq_client
 
-    return _client
 
-
-def _extract_content(message_content) -> str:
-    """Преобразует ответ модели к строке."""
-    if isinstance(message_content, str):
-        return message_content.strip()
-
-    if isinstance(message_content, list):
-        parts: list[str] = []
-        for item in message_content:
-            if isinstance(item, dict) and item.get("type") == "text":
-                parts.append(item.get("text", ""))
-        return "\n".join(parts).strip()
-
-    return ""
+def _get_github_client() -> AsyncOpenAI:
+    """Возвращает клиент для GitHub Models API."""
+    global _github_client
+    if not GITHUB_TOKEN:
+        raise ValueError("GITHUB_TOKEN не задан. Проверьте файл .env")
+    if _github_client is None:
+        _github_client = AsyncOpenAI(
+            api_key=GITHUB_TOKEN,
+            base_url="https://models.github.ai/inference",
+        )
+    return _github_client
 
 
 def _guess_mime_type(image_path: str) -> str:
     """Подбирает MIME-тип по расширению файла."""
     suffix = Path(image_path).suffix.lower()
-    if suffix == ".png":
-        return "image/png"
-    if suffix == ".webp":
-        return "image/webp"
-    if suffix == ".gif":
-        return "image/gif"
-    return "image/jpeg"
+    return {
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".gif": "image/gif",
+    }.get(suffix, "image/jpeg")
 
 
 def build_openrouter_error(
@@ -73,67 +67,43 @@ def build_openrouter_error(
     *,
     model: str | None = None,
 ) -> RuntimeError:
-    """Преобразует сырую ошибку OpenRouter в понятное сообщение."""
+    """Преобразует ошибку LLM API в понятное сообщение."""
     error_text = str(error)
-    normalized_text = error_text.lower()
+    lower = error_text.lower()
 
-    if (
-        "401" in error_text
-        or "403" in error_text
-        or "invalid api key" in normalized_text
-        or "unauthorized" in normalized_text
-    ):
-        return RuntimeError("Неверный OPENROUTER_API_KEY. Проверьте ключ в .env")
+    if "401" in error_text or "403" in error_text or "unauthorized" in lower:
+        return RuntimeError("Неверный API-ключ. Проверьте GROQ_API_KEY / GITHUB_TOKEN в .env")
 
-    if "402" in error_text or "insufficient credits" in normalized_text:
-        model_hint = f" Текущая модель: {model}." if model else ""
-        return RuntimeError(
-            "Недостаточно кредитов OpenRouter. Пополните баланс или выберите более дешёвую модель."
-            f"{model_hint} Проверьте OPENROUTER_TEXT_MODEL / OPENROUTER_VISION_MODEL в .env."
-        )
+    if "429" in error_text or "rate limit" in lower:
+        hint = f" Модель: {model}." if model else ""
+        return RuntimeError(f"Превышен лимит запросов.{hint} Попробуйте позже.")
 
     return RuntimeError(f"{context}: {error_text}")
-
-
-async def chat_completion(
-    messages: list[dict],
-    *,
-    model: str,
-    max_tokens: int,
-    temperature: float = 0.1,
-) -> str:
-    """Отправляет chat completion запрос через OpenRouter."""
-    client = _get_client()
-    response = await client.chat.completions.create(
-        model=model,
-        messages=messages,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        extra_headers=OPENROUTER_HEADERS,
-    )
-    return _extract_content(response.choices[0].message.content)
 
 
 async def generate_text(
     prompt: str,
     *,
     system_prompt: str | None = None,
-    model: str = OPENROUTER_TEXT_MODEL,
     max_tokens: int = TEXT_MAX_TOKENS,
     temperature: float = 0.1,
 ) -> str:
-    """Генерирует текст через OpenRouter."""
+    """Генерирует текст через Groq API (Llama 3.3 70B)."""
+    client = _get_groq_client()
+
     messages: list[dict] = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
 
-    return await chat_completion(
-        messages,
-        model=model,
+    response = await client.chat.completions.create(
+        model=GROQ_TEXT_MODEL,
+        messages=messages,
         max_tokens=max_tokens,
         temperature=temperature,
     )
+    content = response.choices[0].message.content
+    return (content or "").strip()
 
 
 async def analyze_image(
@@ -141,11 +111,12 @@ async def analyze_image(
     image_path: str,
     *,
     system_prompt: str | None = None,
-    model: str = OPENROUTER_VISION_MODEL,
     max_tokens: int = VISION_MAX_TOKENS,
     temperature: float = 0.1,
 ) -> str:
-    """Анализирует изображение через OpenRouter multimodal API."""
+    """Анализирует изображение через GitHub Models (GPT-4o)."""
+    client = _get_github_client()
+
     image_bytes = Path(image_path).read_bytes()
     image_base64 = base64.b64encode(image_bytes).decode("ascii")
     mime_type = _guess_mime_type(image_path)
@@ -154,24 +125,24 @@ async def analyze_image(
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
 
-    messages.append(
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": prompt},
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:{mime_type};base64,{image_base64}",
-                    },
+    messages.append({
+        "role": "user",
+        "content": [
+            {"type": "text", "text": prompt},
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{mime_type};base64,{image_base64}",
                 },
-            ],
-        }
-    )
+            },
+        ],
+    })
 
-    return await chat_completion(
-        messages,
-        model=model,
+    response = await client.chat.completions.create(
+        model=GITHUB_VISION_MODEL,
+        messages=messages,
         max_tokens=max_tokens,
         temperature=temperature,
     )
+    content = response.choices[0].message.content
+    return (content or "").strip()
