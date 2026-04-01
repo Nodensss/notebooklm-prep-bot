@@ -1,6 +1,7 @@
 import logging
 import re
 
+from config import OPENROUTER_TEXT_MODEL
 from services.openrouter_client import (
     PROMPT_MAX_TOKENS,
     TEXT_MAX_TOKENS,
@@ -126,7 +127,11 @@ async def format_for_learning(transcript: str) -> dict:
     except RuntimeError:
         raise
     except Exception as error:
-        raise build_openrouter_error(error, "Ошибка OpenRouter API") from error
+        raise build_openrouter_error(
+            error,
+            "Ошибка OpenRouter API",
+            model=OPENROUTER_TEXT_MODEL,
+        ) from error
 
     logger.info("Учебный пакет сгенерирован (%d символов)", len(full_text))
     return _parse_sections(full_text)
@@ -157,4 +162,5 @@ async def generate_notebooklm_prompt(transcript: str, learning_pack: dict) -> st
         raise build_openrouter_error(
             error,
             "Ошибка генерации промпта NotebookLM через OpenRouter",
+            model=OPENROUTER_TEXT_MODEL,
         ) from error
