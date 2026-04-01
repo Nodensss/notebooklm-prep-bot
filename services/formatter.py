@@ -1,14 +1,12 @@
+"""Сервис структурирования материалов через GigaChat API."""
+
 import logging
 import re
 
-import google.generativeai as genai
-
-from config import GEMINI_API_KEY
-from services.rate_limiter import gemini_limiter
+from services.gigachat_client import TEXT_MODEL, chat_text
+from services.rate_limiter import llm_limiter
 
 logger = logging.getLogger(__name__)
-
-GEMINI_MODEL = "gemini-2.5-flash"
 
 LEARNING_PACK_PROMPT = """\
 Ты — эксперт по обучению и быстрому усвоению материала.
@@ -77,7 +75,7 @@ def _resolve_section_key(title: str) -> str | None:
 
 
 def _parse_sections(text: str) -> dict:
-    """Разбирает ответ Gemini по секциям и устойчиво сопоставляет заголовки."""
+    """Разбирает ответ GigaChat по секциям и устойчиво сопоставляет заголовки."""
     result = {key: "" for key in _SECTION_KEYWORDS}
     result["full_text"] = text
 
@@ -103,53 +101,44 @@ def _parse_sections(text: str) -> dict:
 
 
 async def format_for_learning(transcript: str) -> dict:
-    """Структурирует транскрипцию в учебный пакет через Gemini API."""
-    if not GEMINI_API_KEY:
-        raise ValueError("GEMINI_API_KEY не задан. Проверьте файл .env")
-
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel(GEMINI_MODEL)
+    """Структурирует транскрипцию в учебный пакет через GigaChat API."""
     prompt = LEARNING_PACK_PROMPT.format(transcript=transcript)
 
     try:
-        logger.info("Отправляю транскрипт в Gemini для структурирования...")
-        response = await gemini_limiter.execute(
-            lambda: model.generate_content_async(prompt)
+        logger.info("Отправляю транскрипт в GigaChat для структурирования...")
+        response_text = await llm_limiter.execute(
+            lambda: chat_text(prompt, model=TEXT_MODEL)
         )
-        full_text = response.text
-    except RuntimeError:
-        raise
     except Exception as error:
-        error_str = str(error)
-        if "API_KEY" in error_str or "401" in error_str:
+        error_text = str(error)
+        if "401" in error_text:
             raise RuntimeError(
-                "Неверный GEMINI_API_KEY. Проверьте ключ в .env"
+                "Неверный GIGACHAT_CREDENTIALS. Проверьте ключ в .env"
             ) from error
-        raise RuntimeError(f"Ошибка Gemini API: {error_str}") from error
+        raise RuntimeError(f"Ошибка GigaChat API: {error_text}") from error
 
-    logger.info("Учебный пакет сгенерирован (%d символов)", len(full_text))
-    return _parse_sections(full_text)
+    logger.info("Учебный пакет сгенерирован (%d символов)", len(response_text))
+    return _parse_sections(response_text)
 
 
 async def generate_notebooklm_prompt(transcript: str, learning_pack: dict) -> str:
-    """Генерирует инструкцию для NotebookLM Audio Overview через Gemini API."""
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel(GEMINI_MODEL)
-
+    """Генерирует инструкцию для NotebookLM Audio Overview через GigaChat API."""
     prompt = NOTEBOOKLM_PROMPT.format(
         transcript=transcript,
         learning_pack=learning_pack.get("full_text", ""),
     )
 
     try:
-        logger.info("Генерирую инструкцию для NotebookLM...")
-        response = await gemini_limiter.execute(
-            lambda: model.generate_content_async(prompt)
+        logger.info("Генерирую инструкцию для NotebookLM через GigaChat...")
+        return await llm_limiter.execute(
+            lambda: chat_text(prompt, model=TEXT_MODEL)
         )
-        return response.text.strip()
-    except RuntimeError:
-        raise
     except Exception as error:
+        error_text = str(error)
+        if "401" in error_text:
+            raise RuntimeError(
+                "Неверный GIGACHAT_CREDENTIALS. Проверьте ключ в .env"
+            ) from error
         raise RuntimeError(
-            f"Ошибка генерации промпта NotebookLM: {error}"
+            f"Ошибка генерации промпта NotebookLM через GigaChat: {error_text}"
         ) from error

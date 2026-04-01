@@ -47,7 +47,8 @@ cp .env.example .env
 
 - `BOT_TOKEN` — токен Telegram-бота от `@BotFather`
 - `GROQ_API_KEY` — ключ API Groq
-- `GEMINI_API_KEY` — ключ Google Gemini
+- `GIGACHAT_CREDENTIALS` — authorization key для GigaChat API
+- `GIGACHAT_SCOPE` — scope авторизации, по умолчанию `GIGACHAT_API_PERS`
 
 4. Убедитесь, что установлен `ffmpeg`:
 
@@ -104,7 +105,8 @@ nano /home/ubuntu/notebooklm-prep-bot/.env
 ```env
 BOT_TOKEN=...
 GROQ_API_KEY=...
-GEMINI_API_KEY=...
+GIGACHAT_CREDENTIALS=...
+GIGACHAT_SCOPE=GIGACHAT_API_PERS
 ```
 
 ### 5. Установите systemd-сервис
@@ -153,7 +155,8 @@ https://github.com/Nodensss/notebooklm-prep-bot
 
 - `BOT_TOKEN`
 - `GROQ_API_KEY`
-- `GEMINI_API_KEY`
+- `GIGACHAT_CREDENTIALS`
+- `GIGACHAT_SCOPE`
 
 5. Нажмите `Run`
 6. Для постоянной работы откройте настройки Repl и включите `Always On`
@@ -174,5 +177,5 @@ https://github.com/Nodensss/notebooklm-prep-bot
 - Python 3.11
 - aiogram 3.x
 - Groq Whisper API
-- Google Gemini API
+- GigaChat API
 - ffmpeg
