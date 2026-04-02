@@ -1,12 +1,12 @@
-# Сервис форматирования: структурирование транскрипции через Groq LLM
+# Сервис форматирования: структурирование транскрипции через GitHub Models.
 
 import logging
 import re
 
-from services.openrouter_client import (
+from services.llm_client import (
     PROMPT_MAX_TOKENS,
     TEXT_MAX_TOKENS,
-    build_openrouter_error,
+    build_llm_error,
     generate_text,
 )
 from services.rate_limiter import llm_limiter
@@ -108,11 +108,11 @@ def _parse_sections(text: str) -> dict:
 
 
 async def format_for_learning(transcript: str) -> dict:
-    """Структурирует транскрипцию в учебный пакет через Groq (Llama 3.3 70B)."""
+    """Структурирует транскрипцию в учебный пакет через GitHub Models."""
     prompt = LEARNING_PACK_PROMPT.format(transcript=transcript)
 
     try:
-        logger.info("Отправляю материал в Groq для структурирования...")
+        logger.info("Отправляю материал в GitHub Models для структурирования...")
         full_text = await llm_limiter.execute(
             lambda: generate_text(
                 prompt,
@@ -126,14 +126,14 @@ async def format_for_learning(transcript: str) -> dict:
     except RuntimeError:
         raise
     except Exception as error:
-        raise build_openrouter_error(error, "Ошибка Groq API") from error
+        raise build_llm_error(error, "Ошибка GitHub Models") from error
 
     logger.info("Учебный пакет сгенерирован (%d символов)", len(full_text))
     return _parse_sections(full_text)
 
 
 async def generate_notebooklm_prompt(transcript: str, learning_pack: dict) -> str:
-    """Генерирует инструкцию для NotebookLM Audio Overview через Groq."""
+    """Генерирует инструкцию для NotebookLM Audio Overview через GitHub Models."""
     prompt = NOTEBOOKLM_PROMPT.format(
         transcript=transcript,
         learning_pack=learning_pack.get("full_text", ""),
@@ -154,4 +154,4 @@ async def generate_notebooklm_prompt(transcript: str, learning_pack: dict) -> st
     except RuntimeError:
         raise
     except Exception as error:
-        raise build_openrouter_error(error, "Ошибка генерации промпта NotebookLM") from error
+        raise build_llm_error(error, "Ошибка генерации промпта NotebookLM") from error

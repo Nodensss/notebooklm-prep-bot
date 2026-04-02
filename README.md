@@ -20,7 +20,17 @@ Telegram-бот, который принимает учебные материа
   - презентаций
   - NotebookLM Video Overview
   - инфографики
+- Кнопки для OCR:
+  - `🧾 Исходный текст / OCR`
+  - `📋 Скопировать OCR`
+  - `📄 Исходник .txt`
 - Дневной лимит: 5 обработок на пользователя
+
+## Провайдеры
+
+- Текстовые задачи и OCR идут через `GitHub Models`
+- Видео транскрибируется через `Groq Whisper`
+- Если `Groq` недоступен с вашего VPS, текст и изображения будут работать, а видео — нет
 
 ## Локальный запуск
 
@@ -39,47 +49,46 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-3. Скопируйте `.env.example` в `.env` и заполните токены:
+3. Скопируйте `.env.example` в `.env`:
 
 ```bash
 cp .env.example .env
 ```
 
-- `BOT_TOKEN` — токен Telegram-бота от `@BotFather`
-- `GROQ_API_KEY` — ключ API Groq
-- `OPENROUTER_API_KEY` — ключ OpenRouter
-- `OPENROUTER_TEXT_MODEL` — модель OpenRouter для текстовых задач
-- `OPENROUTER_VISION_MODEL` — модель OpenRouter для изображений
+4. Заполните переменные окружения:
 
-4. Убедитесь, что установлен `ffmpeg`:
+- `BOT_TOKEN` — токен Telegram-бота от `@BotFather`
+- `GITHUB_TOKEN` — токен GitHub Models для текста и OCR
+- `GITHUB_TEXT_MODEL` — модель GitHub Models для текстовых задач
+- `GITHUB_VISION_MODEL` — модель GitHub Models для OCR и описания изображений
+- `GROQ_API_KEY` — необязательный ключ Groq для транскрибации видео
+
+Пример:
+
+```env
+BOT_TOKEN=...
+GITHUB_TOKEN=...
+GITHUB_TEXT_MODEL=openai/gpt-4o
+GITHUB_VISION_MODEL=openai/gpt-4o
+GROQ_API_KEY=...
+```
+
+5. Убедитесь, что установлен `ffmpeg`:
 
 ```bash
 sudo apt install ffmpeg   # Linux
 brew install ffmpeg       # macOS
 ```
 
-5. Запустите бота:
+6. Запустите бота:
 
 ```bash
 python bot.py
 ```
 
-## Деплой на VPS (Oracle Cloud Free Tier)
+## Деплой на VPS
 
-### 1. Создайте бесплатный инстанс
-
-- Зарегистрируйте аккаунт в Oracle Cloud Free Tier
-- Создайте Compute Instance с образом Ubuntu
-- Для бесплатного ARM-варианта подойдёт `VM.Standard.A1.Flex` (Ampere)
-- Сохраните публичный IP-адрес и SSH-ключ
-
-### 2. Подключитесь по SSH
-
-```bash
-ssh ubuntu@<IP_ВАШЕГО_СЕРВЕРА>
-```
-
-### 3. Запустите автоматическую установку
+### Первый запуск
 
 ```bash
 git clone https://github.com/Nodensss/notebooklm-prep-bot.git
@@ -95,23 +104,23 @@ chmod +x deploy/setup.sh deploy/update.sh
 - установит зависимости
 - создаст `.env`, если его ещё нет
 
-### 4. Заполните `.env`
+### Настройка `.env`
 
 ```bash
 nano /home/ubuntu/notebooklm-prep-bot/.env
 ```
 
-Пример содержимого:
+Пример:
 
 ```env
 BOT_TOKEN=...
+GITHUB_TOKEN=...
+GITHUB_TEXT_MODEL=openai/gpt-4o
+GITHUB_VISION_MODEL=openai/gpt-4o
 GROQ_API_KEY=...
-OPENROUTER_API_KEY=...
-OPENROUTER_TEXT_MODEL=google/gemini-2.5-flash
-OPENROUTER_VISION_MODEL=google/gemini-2.5-flash
 ```
 
-### 5. Установите systemd-сервис
+### Установка сервиса
 
 ```bash
 cd /home/ubuntu/notebooklm-prep-bot
@@ -121,7 +130,7 @@ sudo systemctl enable notebooklm-bot
 sudo systemctl start notebooklm-bot
 ```
 
-### 6. Управление сервисом
+### Управление сервисом
 
 ```bash
 sudo systemctl start notebooklm-bot
@@ -130,17 +139,23 @@ sudo systemctl restart notebooklm-bot
 sudo systemctl status notebooklm-bot
 ```
 
-### 7. Просмотр логов
+### Логи
 
 ```bash
 journalctl -u notebooklm-bot -f
 ```
 
-### 8. Обновление после новых коммитов
+### Обновление после коммитов
 
 ```bash
 cd /home/ubuntu/notebooklm-prep-bot
 ./deploy/update.sh
+```
+
+Если нужно обновиться на конкретную ветку:
+
+```bash
+./deploy/update.sh имя-ветки
 ```
 
 ## Деплой на Replit
@@ -156,61 +171,49 @@ https://github.com/Nodensss/notebooklm-prep-bot
 4. После импорта откройте `Tools` → `Secrets` и добавьте:
 
 - `BOT_TOKEN`
-- `GROQ_API_KEY`
-- `OPENROUTER_API_KEY`
-- `OPENROUTER_TEXT_MODEL`
-- `OPENROUTER_VISION_MODEL`
+- `GITHUB_TOKEN`
+- `GITHUB_TEXT_MODEL`
+- `GITHUB_VISION_MODEL`
+- `GROQ_API_KEY` — только если нужна обработка видео
 
 5. Нажмите `Run`
-6. Для постоянной работы откройте настройки Repl и включите `Always On`
+6. Для постоянной работы включите `Always On`
 
 В проекте уже есть:
 
 - `.replit` — команда запуска и настройки deployment
 - `replit.nix` — зависимости `python311` и `ffmpeg`
 
-## Структура deploy
-
-- `deploy/setup.sh` — первичная установка проекта на Ubuntu VPS
-- `deploy/notebooklm-bot.service` — systemd unit для автозапуска
-- `deploy/update.sh` — обновление проекта и перезапуск сервиса
-
-
-## Новая структура проекта
+## Структура проекта
 
 ```text
 notebooklm-prep-bot/
-├── bot.py                    # точка входа бота
-├── config.py                 # переменные окружения и настройки моделей
-├── handlers/                 # обработчики Telegram-сообщений и callback-кнопок
+├── bot.py                  # точка входа бота
+├── config.py               # переменные окружения и настройки моделей
+├── handlers/               # обработчики Telegram-сообщений и callback-кнопок
 │   ├── start.py
 │   └── content.py
-├── services/                 # интеграции с API и бизнес-логика
-│   ├── transcribe.py         # видео -> аудио -> транскрипция
-│   ├── vision.py             # OCR/описание изображений через OpenRouter Vision
-│   ├── formatter.py          # учебный пакет + prompt для NotebookLM
-│   ├── prompt_generator.py   # отдельные prompt-режимы (презентация/видео/инфографика)
-│   ├── openrouter_client.py  # общий OpenRouter клиент и ошибки
+├── services/               # интеграции с API и бизнес-логика
+│   ├── transcribe.py       # видео -> аудио -> транскрипция
+│   ├── vision.py           # OCR/описание изображений через GitHub Models
+│   ├── formatter.py        # учебный пакет + prompt для NotebookLM
+│   ├── prompt_generator.py # отдельные prompt-режимы
+│   ├── llm_client.py       # общий клиент GitHub Models и ошибки
 │   └── rate_limiter.py
-└── deploy/                   # VPS/systemd скрипты деплоя
+└── deploy/                 # VPS/systemd скрипты деплоя
 ```
 
-## Почему появляется ошибка «Недостаточно кредитов OpenRouter»
+## Что важно знать про провайдеры
 
-Эта ошибка приходит от OpenRouter (HTTP 402 / `insufficient credits`) и не связана с Telegram-лимитом бота.
-
-Проверьте:
-
-1. Баланс аккаунта OpenRouter и лимиты ключа.
-2. Значения `OPENROUTER_TEXT_MODEL` и `OPENROUTER_VISION_MODEL` в `.env` — более дорогие модели быстрее расходуют баланс.
-3. Что для OCR используется модель с поддержкой изображений (multimodal).
-
-Бот теперь дополнительно показывает текущую модель в тексте ошибки, чтобы быстрее понять причину.
+1. Для текста и OCR нужен `GITHUB_TOKEN`
+2. Для OCR используйте multimodal-модель в `GITHUB_VISION_MODEL`, например `openai/gpt-4o`
+3. Видео по-прежнему зависит от `Groq Whisper`
+4. Если `Groq` отвечает `403` с вашего сервера, бот честно сообщит, что видео временно недоступно
 
 ## Технологии
 
 - Python 3.11
 - aiogram 3.x
+- GitHub Models API
 - Groq Whisper API
-- OpenRouter API
 - ffmpeg
