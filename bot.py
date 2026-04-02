@@ -18,12 +18,12 @@ async def main() -> None:
     if not BOT_TOKEN:
         raise ValueError("BOT_TOKEN не задан. Проверьте файл .env")
 
-    if not GROQ_API_KEY:
-        raise ValueError("GROQ_API_KEY не задан. Проверьте файл .env")
-
     if not GITHUB_TOKEN:
+        raise ValueError("GITHUB_TOKEN не задан. Проверьте файл .env")
+
+    if not GROQ_API_KEY:
         logger.warning(
-            "GITHUB_TOKEN не задан. Обработка изображений (Vision/OCR) будет недоступна."
+            "GROQ_API_KEY не задан. Обработка видео будет недоступна, но текст и изображения продолжат работать через GitHub Models."
         )
 
     bot = Bot(token=BOT_TOKEN)

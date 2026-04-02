@@ -195,6 +195,10 @@ async def transcribe_audio(audio_path: str) -> str:
         error_str = str(e)
         if "401" in error_str or "auth" in error_str.lower():
             raise RuntimeError("Неверный GROQ_API_KEY. Проверьте ключ в .env") from e
+        if "403" in error_str or "forbidden" in error_str.lower():
+            raise RuntimeError(
+                "Groq недоступен с текущего сервера. Обработка видео временно недоступна, но текст и изображения продолжают работать."
+            ) from e
         if "413" in error_str or "too large" in error_str.lower():
             raise RuntimeError("Файл слишком большой для API") from e
         raise RuntimeError(f"Ошибка транскрипции: {error_str}") from e
