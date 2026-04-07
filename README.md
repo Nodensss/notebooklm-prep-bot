@@ -44,8 +44,9 @@ cp .env.example .env
 ```
 
 - `BOT_TOKEN` — токен Telegram-бота от `@BotFather`
-- `GROQ_API_KEY` — ключ API Groq (текстовые задачи, Llama 3.3 70B)
-- `GITHUB_TOKEN` — токен GitHub (Vision/OCR через GitHub Models, GPT-4o)
+- `GITHUB_TOKEN` — токен GitHub Models для текста и OCR
+- `GITHUB_TEXT_MODEL` — модель GitHub Models для текстовых задач
+- `GITHUB_VISION_MODEL` — модель GitHub Models для OCR и описания изображений
 
 4. Запустите бота:
 
@@ -75,8 +76,9 @@ nano .env
 
 ```env
 BOT_TOKEN=...
-GROQ_API_KEY=...
 GITHUB_TOKEN=...
+GITHUB_TEXT_MODEL=openai/gpt-4o
+GITHUB_VISION_MODEL=openai/gpt-4o
 ```
 
 ### 3. Установите systemd-сервис
@@ -114,7 +116,7 @@ notebooklm-prep-bot/
 │   ├── vision.py             # OCR/описание изображений через GitHub Models
 │   ├── formatter.py          # учебный пакет + prompt для NotebookLM
 │   ├── prompt_generator.py   # промпт-режимы (презентация/инфографика)
-│   ├── openrouter_client.py  # Groq + GitHub Models клиенты
+│   ├── llm_client.py         # общий клиент GitHub Models и ошибки
 │   └── rate_limiter.py
 └── deploy/                   # VPS/systemd скрипты деплоя
 ```
@@ -123,5 +125,4 @@ notebooklm-prep-bot/
 
 - Python 3.11
 - aiogram 3.x
-- Groq API (Llama 3.3 70B — текстовые задачи)
-- GitHub Models API (GPT-4o — Vision/OCR)
+- GitHub Models API (GPT-4o — текст и OCR)

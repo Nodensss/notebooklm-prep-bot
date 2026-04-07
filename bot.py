@@ -3,7 +3,7 @@ import logging
 
 from aiogram import Bot, Dispatcher
 
-from config import BOT_TOKEN, GITHUB_TOKEN, GROQ_API_KEY
+from config import BOT_TOKEN, GITHUB_TOKEN
 from handlers import content, start
 
 logging.basicConfig(
@@ -18,13 +18,8 @@ async def main() -> None:
     if not BOT_TOKEN:
         raise ValueError("BOT_TOKEN не задан. Проверьте файл .env")
 
-    if not GROQ_API_KEY:
-        raise ValueError("GROQ_API_KEY не задан. Проверьте файл .env")
-
     if not GITHUB_TOKEN:
-        logger.warning(
-            "GITHUB_TOKEN не задан. Обработка изображений (Vision/OCR) будет недоступна."
-        )
+        raise ValueError("GITHUB_TOKEN не задан. Проверьте файл .env")
 
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()

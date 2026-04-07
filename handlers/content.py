@@ -398,7 +398,7 @@ async def _format_and_reply(
     status_msg: Message,
     user_id: int | None = None,
 ) -> None:
-    """Общая логика форматирования: Groq LLM → inline-кнопки.
+    """Общая логика форматирования: GitHub Models → inline-кнопки.
 
     Args:
         message: входящее сообщение пользователя.
