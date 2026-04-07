@@ -114,7 +114,7 @@ notebooklm-prep-bot/
 │   ├── vision.py             # OCR/описание изображений через GitHub Models
 │   ├── formatter.py          # учебный пакет + prompt для NotebookLM
 │   ├── prompt_generator.py   # промпт-режимы (презентация/инфографика)
-│   ├── openrouter_client.py  # Groq + GitHub Models клиенты
+│   ├── llm_client.py         # Groq + GitHub Models клиенты
 │   └── rate_limiter.py
 └── deploy/                   # VPS/systemd скрипты деплоя
 ```

@@ -2,9 +2,9 @@
 
 import logging
 
-from services.openrouter_client import (
+from services.llm_client import (
     PROMPT_MAX_TOKENS,
-    build_openrouter_error,
+    build_llm_error,
     generate_text,
 )
 from services.rate_limiter import llm_limiter
@@ -62,7 +62,7 @@ async def _generate_prompt(prompt: str, log_label: str) -> str:
     except RuntimeError:
         raise
     except Exception as error:
-        raise build_openrouter_error(
+        raise build_llm_error(
             error,
             "Ошибка генерации промпта",
         ) from error
