@@ -61,7 +61,7 @@ def _guess_mime_type(image_path: str) -> str:
     }.get(suffix, "image/jpeg")
 
 
-def build_openrouter_error(
+def build_llm_error(
     error: Exception,
     context: str,
     *,

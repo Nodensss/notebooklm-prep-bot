@@ -3,10 +3,10 @@
 import logging
 from pathlib import Path
 
-from services.openrouter_client import (
+from services.llm_client import (
     VISION_MAX_TOKENS,
     analyze_image,
-    build_openrouter_error,
+    build_llm_error,
 )
 from services.rate_limiter import llm_limiter
 
@@ -77,7 +77,7 @@ async def describe_image(image_path: str) -> str:
                 "Выбранная модель не поддерживает изображения. "
                 "Укажите multimodal-модель в GITHUB_VISION_MODEL."
             ) from error
-        raise build_openrouter_error(
+        raise build_llm_error(
             error,
             "Ошибка GitHub Models Vision",
         ) from error
