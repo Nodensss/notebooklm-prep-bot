@@ -8,7 +8,7 @@ REPO_URL="https://github.com/Nodensss/notebooklm-prep-bot.git"
 
 echo "=== Установка зависимостей ==="
 sudo apt update
-sudo apt install -y python3.11 python3.11-venv python3-pip ffmpeg git
+sudo apt install -y python3.11 python3.11-venv python3-pip git
 
 echo "=== Клонирование репозитория ==="
 cd "/home/$USER"

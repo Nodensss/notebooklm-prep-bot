@@ -27,23 +27,6 @@ PRESENTATION_PROMPT = """\
 {user_text}
 """
 
-VIDEO_PROMPT = """\
-Ты — эксперт по созданию контента для NotebookLM Video и видео-подкастов.
-На основе описания пользователя создай инструкцию для NotebookLM Video Overview.
-
-Инструкция должна содержать:
-- На чём фокусироваться
-- Какие вопросы разобрать
-- Стиль подачи (формальный/разговорный)
-- Что НЕ включать
-- Целевая длительность
-
-Формат: готовый текст для поля Customize в NotebookLM.
-
-Описание пользователя:
-{user_text}
-"""
-
 INFOGRAPHIC_PROMPT = """\
 Ты — эксперт по визуализации данных и инфографике.
 На основе описания пользователя создай детальный промпт для генерации инфографики.
@@ -91,12 +74,6 @@ async def generate_presentation_prompt(user_text: str) -> str:
     """Генерирует промпт для создания презентации."""
     prompt = PRESENTATION_PROMPT.format(user_text=user_text)
     return await _generate_prompt(prompt, "промпт для презентации")
-
-
-async def generate_video_prompt(user_text: str) -> str:
-    """Генерирует промпт для NotebookLM Video Overview."""
-    prompt = VIDEO_PROMPT.format(user_text=user_text)
-    return await _generate_prompt(prompt, "промпт для видео")
 
 
 async def generate_infographic_prompt(user_text: str) -> str:

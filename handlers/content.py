@@ -1,4 +1,4 @@
-# Обработчик входящих видео, документов, изображений и текстовых сообщений
+# Обработчик входящих документов, изображений и текстовых сообщений
 
 import html
 import logging
@@ -21,16 +21,11 @@ from services.formatter import format_for_learning, generate_notebooklm_prompt
 from services.prompt_generator import (
     generate_infographic_prompt,
     generate_presentation_prompt,
-    generate_video_prompt,
 )
-from services.transcribe import process_video
-from services.vision import describe_image, describe_images
+from services.vision import describe_images
 
 logger = logging.getLogger(__name__)
 router = Router()
-
-# Допустимые MIME-типы для документов с видео
-VIDEO_MIME_TYPES = {"video/mp4", "video/x-matroska", "video/webm"}
 
 # Допустимые MIME-типы для текстовых документов
 TEXT_MIME_TYPES = {
@@ -88,7 +83,7 @@ IMAGE_BATCH_CLEAR_CALLBACK = "image_batch_clear"
 _SECTION_INFO = {
     "source_text": ("transcript", "🧾 Исходный текст / OCR"),
     "key_points": ("key_points", "📋 Ключевые тезисы"),
-    "plan": ("plan", "📝 План видео"),
+    "plan": ("plan", "📝 План материала"),
     "quiz": ("quiz", "❓ Вопросы для самопроверки"),
     "cards": ("cards", "🃏 Карточки для запоминания"),
     "practice": ("practice", "💪 Практическое задание"),
@@ -98,7 +93,6 @@ _SECTION_INFO = {
 _PROMPT_ACTIONS = {
     "text_action_learning": "📚 Учебный пакет",
     "text_action_presentation": "🖼 Промпт для презентации",
-    "text_action_video": "🎬 Промпт для видео",
     "text_action_infographic": "📊 Промпт для инфографики",
 }
 
@@ -205,12 +199,6 @@ def _build_text_action_keyboard(include_learning_pack: bool) -> InlineKeyboardMa
             InlineKeyboardButton(
                 text=_PROMPT_ACTIONS["text_action_presentation"],
                 callback_data="text_action_presentation",
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                text=_PROMPT_ACTIONS["text_action_video"],
-                callback_data="text_action_video",
             )
         ],
         [
@@ -410,16 +398,13 @@ async def _format_and_reply(
     status_msg: Message,
     user_id: int | None = None,
 ) -> None:
-    """Общая логика форматирования: OpenRouter → inline-кнопки.
-
-    Вынесено отдельно, чтобы использовать и для видео, и для текста/документов.
+    """Общая логика форматирования: Groq LLM → inline-кнопки.
 
     Args:
         message: входящее сообщение пользователя.
-        transcript: исходный текст (транскрипция или текст документа).
+        transcript: исходный текст (OCR или текст документа).
         status_msg: сообщение-статус для обновления прогресса.
     """
-    # Структурирование через OpenRouter
     await status_msg.edit_text("⏳ Структурирую материал...")
     learning_pack = await format_for_learning(transcript)
 
@@ -455,60 +440,6 @@ async def _format_and_reply(
         reply_markup=_build_keyboard(),
         parse_mode="Markdown",
     )
-
-
-async def _process_video_and_reply(message: Message, file_id: str) -> None:
-    """Обработка видео: скачать → транскрибировать → форматировать → ответить.
-
-    Args:
-        message: входящее сообщение.
-        file_id: идентификатор файла в Telegram.
-    """
-    user_id = message.from_user.id
-    if not _check_rate_limit(user_id):
-        await message.answer(
-            "⛔ Лимит на сегодня исчерпан. Завтра можно снова!"
-        )
-        return
-
-    status_msg = await message.answer("⏳ Скачиваю видео...")
-    video_path = None
-
-    try:
-        video_path = await _download_file(message.bot, file_id)
-
-        # Извлечение аудио и транскрипция
-        await status_msg.edit_text("⏳ Извлекаю аудио...")
-        transcript = await process_video(video_path)
-
-        if not transcript:
-            await status_msg.edit_text(
-                "⚠️ Не удалось распознать речь. "
-                "Возможно, в видео нет разговорной речи."
-            )
-            return
-
-        await _format_and_reply(message, transcript, status_msg)
-
-    except FileNotFoundError as e:
-        logger.error("Файл не найден: %s", e)
-        await status_msg.edit_text(
-            "❌ Не удалось скачать видео. Попробуйте ещё раз."
-        )
-
-    except (ValueError, RuntimeError) as e:
-        logger.error("Ошибка обработки: %s", e)
-        await status_msg.edit_text(f"❌ {e}")
-
-    except Exception:
-        logger.exception("Неожиданная ошибка при обработке видео")
-        await status_msg.edit_text(
-            "❌ Произошла непредвиденная ошибка. Попробуйте позже."
-        )
-
-    finally:
-        if video_path:
-            _safe_remove(video_path)
 
 
 async def _process_document_and_reply(message: Message, file_id: str,
@@ -713,8 +644,6 @@ def _get_prompt_generator(action: str):
     """Возвращает генератор промпта и человекочитаемый заголовок."""
     if action == "text_action_presentation":
         return generate_presentation_prompt, "Промпт для презентации"
-    if action == "text_action_video":
-        return generate_video_prompt, "Промпт для видео"
     if action == "text_action_infographic":
         return generate_infographic_prompt, "Промпт для инфографики"
     return None, ""
@@ -1025,30 +954,16 @@ def _is_image_document(message: Message) -> bool:
     return mime in IMAGE_MIME_TYPES
 
 
-@router.message(F.video)
-async def handle_video(message: Message) -> None:
-    """Обработка обычного видео."""
-    await _process_video_and_reply(message, message.video.file_id)
-
-
 @router.message(F.photo)
 async def handle_photo(message: Message) -> None:
     """Складывает фото в общую серию и ждёт окончания загрузки."""
     await _process_image_and_reply(message, message.photo[-1].file_id)
 
 
-@router.message(F.video_note)
-async def handle_video_note(message: Message) -> None:
-    """Обработка видеосообщения (кружочка)."""
-    await _process_video_and_reply(message, message.video_note.file_id)
-
-
 @router.message(F.document)
 async def handle_document(message: Message) -> None:
-    """Обработка документа — видео или текстового файла."""
-    if message.document and message.document.mime_type in VIDEO_MIME_TYPES:
-        await _process_video_and_reply(message, message.document.file_id)
-    elif _is_image_document(message):
+    """Обработка документа — текстового файла или изображения."""
+    if _is_image_document(message):
         await _queue_image_for_batch(message, message.document.file_id)
     elif _is_text_document(message):
         await _process_document_and_reply(
@@ -1058,7 +973,7 @@ async def handle_document(message: Message) -> None:
         )
     else:
         await message.answer(
-            "Поддерживаемые форматы: видео (mp4, mkv, webm), "
+            "Поддерживаемые форматы: "
             "изображения (JPEG, PNG, WebP, GIF), документы (PDF, DOCX, TXT)."
         )
 
