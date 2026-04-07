@@ -3,7 +3,7 @@ import logging
 
 from aiogram import Bot, Dispatcher
 
-from config import BOT_TOKEN, GROQ_API_KEY, OPENROUTER_API_KEY
+from config import BOT_TOKEN, GITHUB_TOKEN, GROQ_API_KEY
 from handlers import content, start
 
 logging.basicConfig(
@@ -18,12 +18,12 @@ async def main() -> None:
     if not BOT_TOKEN:
         raise ValueError("BOT_TOKEN не задан. Проверьте файл .env")
 
-    if not OPENROUTER_API_KEY:
-        raise ValueError("OPENROUTER_API_KEY не задан. Проверьте файл .env")
-
     if not GROQ_API_KEY:
+        raise ValueError("GROQ_API_KEY не задан. Проверьте файл .env")
+
+    if not GITHUB_TOKEN:
         logger.warning(
-            "GROQ_API_KEY не задан. Обработка видео будет недоступна, но текстовые материалы продолжат работать."
+            "GITHUB_TOKEN не задан. Обработка изображений (Vision/OCR) будет недоступна."
         )
 
     bot = Bot(token=BOT_TOKEN)

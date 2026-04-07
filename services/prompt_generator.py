@@ -1,8 +1,7 @@
-"""Сервис генерации специализированных промптов через OpenRouter."""
+"""Сервис генерации специализированных промптов через Groq LLM."""
 
 import logging
 
-from config import OPENROUTER_TEXT_MODEL
 from services.openrouter_client import (
     PROMPT_MAX_TOKENS,
     build_openrouter_error,
@@ -28,23 +27,6 @@ PRESENTATION_PROMPT = """\
 {user_text}
 """
 
-VIDEO_PROMPT = """\
-Ты — эксперт по созданию контента для NotebookLM Video и видео-подкастов.
-На основе описания пользователя создай инструкцию для NotebookLM Video Overview.
-
-Инструкция должна содержать:
-- На чём фокусироваться
-- Какие вопросы разобрать
-- Стиль подачи (формальный/разговорный)
-- Что НЕ включать
-- Целевая длительность
-
-Формат: готовый текст для поля Customize в NotebookLM.
-
-Описание пользователя:
-{user_text}
-"""
-
 INFOGRAPHIC_PROMPT = """\
 Ты — эксперт по визуализации данных и инфографике.
 На основе описания пользователя создай детальный промпт для генерации инфографики.
@@ -64,9 +46,9 @@ INFOGRAPHIC_PROMPT = """\
 
 
 async def _generate_prompt(prompt: str, log_label: str) -> str:
-    """Отправляет промпт в OpenRouter и возвращает сгенерированный текст."""
+    """Отправляет промпт в Groq и возвращает сгенерированный текст."""
     try:
-        logger.info("Генерирую %s через OpenRouter...", log_label)
+        logger.info("Генерирую %s через Groq...", log_label)
         response_text = await llm_limiter.execute(
             lambda: generate_text(
                 prompt,
@@ -82,8 +64,7 @@ async def _generate_prompt(prompt: str, log_label: str) -> str:
     except Exception as error:
         raise build_openrouter_error(
             error,
-            "Ошибка генерации промпта через OpenRouter",
-            model=OPENROUTER_TEXT_MODEL,
+            "Ошибка генерации промпта",
         ) from error
 
     return response_text.strip()
@@ -93,12 +74,6 @@ async def generate_presentation_prompt(user_text: str) -> str:
     """Генерирует промпт для создания презентации."""
     prompt = PRESENTATION_PROMPT.format(user_text=user_text)
     return await _generate_prompt(prompt, "промпт для презентации")
-
-
-async def generate_video_prompt(user_text: str) -> str:
-    """Генерирует промпт для NotebookLM Video Overview."""
-    prompt = VIDEO_PROMPT.format(user_text=user_text)
-    return await _generate_prompt(prompt, "промпт для видео")
 
 
 async def generate_infographic_prompt(user_text: str) -> str:

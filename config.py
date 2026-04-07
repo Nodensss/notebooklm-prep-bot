@@ -1,28 +1,21 @@
-# Конфигурация бота — загрузка переменных окружения из .env и окружения
+# Конфигурация бота — загрузка переменных окружения из .env
 
 import os
 from dotenv import load_dotenv
 
-# Поддерживаются локальный .env и любые секреты, переданные через переменные окружения.
 load_dotenv()
 
 # Токен Telegram-бота
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 
-# Ключ API Groq (для транскрипции через Whisper)
+# Ключ API Groq (транскрипция Whisper + текстовые LLM-задачи)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
-# Ключ API OpenRouter
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+# Модель Groq для текстовых задач (учебные пакеты, промпты)
+GROQ_TEXT_MODEL = os.getenv("GROQ_TEXT_MODEL", "llama-3.3-70b-versatile")
 
-# Модель OpenRouter для текстовых задач
-OPENROUTER_TEXT_MODEL = os.getenv(
-    "OPENROUTER_TEXT_MODEL",
-    "google/gemini-2.5-flash",
-)
+# Токен GitHub для GitHub Models (Vision / OCR)
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 
-# Модель OpenRouter для изображений
-OPENROUTER_VISION_MODEL = os.getenv(
-    "OPENROUTER_VISION_MODEL",
-    OPENROUTER_TEXT_MODEL,
-)
+# Модель GitHub Models для изображений
+GITHUB_VISION_MODEL = os.getenv("GITHUB_VISION_MODEL", "openai/gpt-4o")
