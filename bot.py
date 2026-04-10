@@ -1,7 +1,9 @@
 import asyncio
 import logging
+import socket
 
 from aiogram import Bot, Dispatcher
+from aiogram.client.session.aiohttp import AiohttpSession
 
 from config import BOT_TOKEN, GITHUB_TOKEN
 from handlers import content, start
@@ -21,7 +23,11 @@ async def main() -> None:
     if not GITHUB_TOKEN:
         raise ValueError("GITHUB_TOKEN не задан. Проверьте файл .env")
 
-    bot = Bot(token=BOT_TOKEN)
+    # На VPS Telegram API стабильнее отвечает по IPv4, чем по IPv6.
+    session = AiohttpSession(timeout=90)
+    session._connector_init["family"] = socket.AF_INET
+
+    bot = Bot(token=BOT_TOKEN, session=session)
     dp = Dispatcher()
 
     dp.include_router(start.router)
